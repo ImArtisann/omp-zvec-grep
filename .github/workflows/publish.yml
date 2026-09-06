@@ -1,20 +1,21 @@
-name: Publish (scoped, restricted)
+name: Publish (scoped, public)
 
-# Publishes @artisann-studios/omp-zvec-grep@0.1.0 to the npm registry org
-# artisann-studios as a RESTRICTED (org-private) package. The GitHub repo
-# stays private. Triggered only manually (workflow_dispatch) or by pushing a
-# v<version> tag. It re-runs the full local verification (frozen install,
-# typecheck/lint/format, hermetic + integration suites, pack validation with
-# tag/version agreement) and only then publishes.
+# Publishes @artisann-studios/omp-zvec-grep@0.1.0 to the npm registry under
+# the artisann-studios scope as a PUBLIC package (public publication was
+# explicitly authorized; no paid org plan is required, anyone can install).
+# The GitHub repository stays private. Triggered only manually
+# (workflow_dispatch) or by pushing a v<version> tag. It re-runs the full
+# local verification (frozen install, typecheck/lint/format, hermetic +
+# integration suites, pack validation with tag/version agreement) and only
+# then publishes. The GitHub repository is public.
 #
 # The publish step is the ONLY step that touches the npm token. Permissions
 # are least-privilege (contents: read). Nothing here targets or pushes to the
 # upstream repository. No provenance is requested: generating npm provenance
 # requires trusted-publishing/OIDC wiring, which is intentionally not set up
 # (and provenance from a private GitHub repo is not assumed supported).
-# Restricted publish requires the org plan that allows private packages and an
-# authenticated npm account with write access to @artisann-studios (via the
-# NPM_TOKEN GitHub Actions secret).
+# Publishing needs an authenticated npm account with write access to the
+# @artisann-studios scope (via the NPM_TOKEN GitHub Actions secret).
 
 on:
     workflow_dispatch:
@@ -27,7 +28,7 @@ permissions:
 
 jobs:
     publish:
-        name: Validate and publish (restricted)
+        name: Validate and publish (public)
         runs-on: ubuntu-latest
         steps:
             - name: Check out
@@ -68,14 +69,15 @@ jobs:
                   RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
               run: bun scripts/validate-pack.mjs --tag "$RELEASE_TAG"
 
-            - name: Publish restricted package
-              # publishConfig.access is "restricted" in package.json, so this
-              # never publishes publicly. NODE_AUTH_TOKEN is the least-privilege
-              # granular access token stored in the NPM_TOKEN secret. --ignore-
-              # scripts ensures the package's lifecycle/prepare/husky hooks
-              # (dev tooling) never execute with the token in the environment.
-              # This is the ONLY step with NODE_AUTH_TOKEN; no step prints the
-              # token or any .npmrc/auth contents.
+            - name: Publish public package
+              # publishConfig.access is "public" in package.json, so this
+              # publishes publicly to the npm registry. NODE_AUTH_TOKEN is the
+              # least-privilege granular access token stored in the NPM_TOKEN
+              # secret. --ignore-scripts ensures the package's
+              # lifecycle/prepare/husky hooks (dev tooling) never execute with
+              # the token in the environment. This is the ONLY step with
+              # NODE_AUTH_TOKEN; no step prints the token or any .npmrc/auth
+              # contents.
               run: npm publish --ignore-scripts
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

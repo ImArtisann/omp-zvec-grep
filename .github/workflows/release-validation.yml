@@ -4,8 +4,8 @@ name: Release validation (manual, no publish)
 # It validates a candidate end to end (typecheck/lint/format, hermetic
 # integration suites, tag/version agreement, real pack + out-of-tree install)
 # and never runs `npm publish`; publication happens only through the explicit
-# manual/tag publish.yml workflow (restricted, org-private). This workflow
-# requests no npm token and stays read-only.
+# manual/tag publish.yml workflow (scoped, public). This workflow requests no
+# npm token and stays read-only.
 #
 # Run manually on a branch or tag via
 # Actions -> "Release validation (manual, no publish)" -> Run workflow.

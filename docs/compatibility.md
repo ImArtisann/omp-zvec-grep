@@ -147,10 +147,10 @@ auto-index lifecycle hardening and the native renderer-edge coverage:
 - CI on GitHub — verified green on the first push (run `34004218551` at
   `6c27cb4`): both `Verify (ubuntu-latest)` (Linux x64) and `Verify (macos-15)`
   (Apple Silicon) completed **success**. The push/PR matrix never publishes; the
-  package is published restricted only through the explicit publish workflow. A
-  later scoped-release push produces a distinct run, recorded here when it
+  package is published public only through the explicit publish workflow. A
+  later public-release push produces a distinct run, recorded here when it
   happens.
-- Package identity (0.1.0 cutover): the native extension is published restricted
-  as `@artisann-studios/omp-zvec-grep` (`publishConfig.access: restricted`); its
-  runtime/config identity is unchanged (`omp-zvec-grep` user config dir and
-  tool/command names are stable).
+- Package identity (0.1.0 cutover): the native extension is published public as
+  `@artisann-studios/omp-zvec-grep` (`publishConfig.access: public`), and the
+  GitHub repository is public; its runtime/config identity is unchanged
+  (`omp-zvec-grep` user config dir and tool/command names are stable).

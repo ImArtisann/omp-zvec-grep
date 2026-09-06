@@ -36,23 +36,24 @@ function run(cmd, argsList, options = {}) {
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
-// --- Scoped restricted-publication guards --------------------------------
-// 0.1.0 is authorized to publish as a restricted (org-private) package under
-// @artisann-studios. The repo itself stays private; the tarball must never be
-// public and no publish script belongs in package.json (publishing goes
-// through .github/workflows/publish.yml).
+// --- Scoped public-publication guards ------------------------------------
+// 0.1.0 is authorized to publish as a PUBLIC package under the
+// @artisann-studios scope (public npm publication was explicitly authorized;
+// no paid org plan is required). The GitHub repository is public. No publish
+// script belongs in package.json (publishing goes through
+// .github/workflows/publish.yml).
 const SCOPE = "@artisann-studios/omp-zvec-grep";
 if (pkg.name !== SCOPE) {
     throw new Error(`package.json name must be ${SCOPE} (got ${pkg.name ?? "(missing)"})`);
 }
 if (pkg.private === true) {
     throw new Error(
-        `package.json must not be private (${SCOPE} is published restricted; drop the private flag)`,
+        `package.json must not be private (${SCOPE} is published public; drop the private flag)`,
     );
 }
-if (pkg.publishConfig?.access !== "restricted") {
+if (pkg.publishConfig?.access !== "public") {
     throw new Error(
-        'package.json publishConfig.access must be "restricted" (org-private; never public)',
+        'package.json publishConfig.access must be "public" (public publication is authorized)',
     );
 }
 if (pkg.scripts && typeof pkg.scripts.publish === "string") {

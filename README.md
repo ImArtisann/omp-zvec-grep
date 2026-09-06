@@ -27,24 +27,20 @@ per-action timeouts.
 
 ## Install
 
-The extension publishes to the npm registry under the restricted scope
-`@artisann-studios/omp-zvec-grep` — org-private, so only npm accounts authorized
-in the `artisann-studios` org (with a scoped read/write access token) can
-install it. It is never public. The GitHub repository
-`https://github.com/ImArtisann/omp-zvec-grep` is also private. Both routes below
-require that org/repo access.
+The extension publishes to the npm registry as the **public** scoped package
+`@artisann-studios/omp-zvec-grep` — anyone can install it, no account or token
+needed. The GitHub repository `https://github.com/ImArtisann/omp-zvec-grep` is
+public too. Install from npm (public) or clone and link.
 
 **From npm (published artifact)** — the OMP 18.1.11 plugin CLI accepts npm
-specs, so a member of `@artisann-studios` installs the pinned release with:
+specs, so anyone installs the pinned release with:
 
 ```sh
 omp plugin install @artisann-studios/omp-zvec-grep@0.1.0
 ```
 
-This resolves against the org registry and needs an authenticated npm session
-for a member account. It is only available after the restricted release has
-actually been published (see `docs/release-checklist.md`); nothing below claims
-a publish that has not run.
+This is only available after the release has actually been published (see
+`docs/release-checklist.md`); nothing below claims a publish that has not run.
 
 **One-off session load** — from the checkout root, load the extension for that
 launch only (no persistent change):
@@ -69,9 +65,7 @@ absolute path; it reads `package.json` (this package is
 routes local paths through the same link flow — either verb works for a
 directory. New sessions load the linked plugin.
 
-**From the private GitHub repo** — git must authenticate (SSH key or a PAT with
-repository scope); an unauthenticated clone is not possible for a private repo.
-Clone with access, then link:
+**From the GitHub repo** — clone (public, no auth needed), then link:
 
 ```sh
 git clone https://github.com/ImArtisann/omp-zvec-grep.git
@@ -179,8 +173,8 @@ take a while and may download the local embedding model.
 ## Development and CI
 
 Requires Bun `1.4.2+` and the OMP `18.1.11` dev pins. No command here publishes
-the package; the restricted `@artisann-studios/omp-zvec-grep` release happens
-only through the explicit publish workflow (`.github/workflows/publish.yml`).
+the package; the public `@artisann-studios/omp-zvec-grep` release happens only
+through the explicit publish workflow (`.github/workflows/publish.yml`).
 
 ```sh
 bun install --frozen-lockfile

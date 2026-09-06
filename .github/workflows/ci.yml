@@ -1,14 +1,12 @@
 name: CI
 
-# Verification matrix for omp-zvec-grep. The repo is private; the scoped
-# package is published restricted to @artisann-studios only through the
-# manual/tag publish.yml workflow, never by CI on push/PR.
+# Verification matrix for omp-zvec-grep. The repo is public; the scoped
+# package is published public to @artisann-studios only through the manual/tag
+# publish.yml workflow, never by CI on push/PR.
 #
-# Runs on every branch push (the new private repo's first push is the
-# feat/native-omp-port branch; no PR is planned initially, so limiting pushes
-# to main would skip verification), on every pull request, and on demand via
-# workflow_dispatch. Nothing here publishes; the package is private and no
-# publish permission is requested.
+# Runs on every branch push, on every pull request, and on demand via
+# workflow_dispatch. Nothing here publishes; publishing happens only through
+# the explicit publish.yml workflow.
 #
 # The real-zg-smoke job is intentionally manual-only (workflow_dispatch): it
 # needs the real pinned upstream zg CLI, and future index-building assertions
