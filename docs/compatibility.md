@@ -133,10 +133,15 @@ auto-index lifecycle hardening and the native renderer-edge coverage:
   docs present; no `test/`, `.github/`, or `scripts/` content), installs the
   tarball out of tree into a consumer-local npm peer graph under a disposable
   agent dir/HOME, and loads the installed extension through the public OMP SDK
-  (`createAgentSession` + `ToolExecutionComponent`) to execute `zvec_status`
-  against a fake `zg` with a nonempty render. This resolves the earlier local
-  limitation note (the installed OMP native addon leaf not resolvable from Bun's
-  cache); that history is preserved above in the bring-up evidence.
+  (`createAgentSession` + `ToolExecutionComponent`) to execute and render
+  `zvec_status` against a fake `zg` that prints exactly the ready line. The
+  probe asserts the extension loaded with no `extensionsResult` errors, the
+  result text carries `Workspace index is ready`, and the rendered component
+  includes the status renderer's custom `index ready` verdict line — proving the
+  real result callback rendered, not a host-error fallback. This resolves the
+  earlier local limitation note (the installed OMP native addon leaf not
+  resolvable from Bun's cache); that history is preserved above in the bring-up
+  evidence.
 - Real CLI cancellation — proven separately (20k-file fixture, SIGINT; see
   above).
 - CI lanes on GitHub (`ubuntu-latest` Linux x64 and `macos-15` Apple Silicon)

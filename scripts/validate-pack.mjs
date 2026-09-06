@@ -142,7 +142,7 @@ try {
 import { setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { loadThemeSync } from "@oh-my-pi/pi-coding-agent/modes/theme/loader";
 const root = process.cwd();
-const { session } = await createAgentSession({
+const created = await createAgentSession({
   cwd: root,
   agentDir: process.env.PI_CODING_AGENT_DIR,
   disableExtensionDiscovery: true,
@@ -152,6 +152,11 @@ const { session } = await createAgentSession({
   hasUI: false,
   toolNames: ["zvec_search", "zvec_index", "zvec_status"],
 });
+const session = created.session;
+const extensionErrors = created.extensionsResult?.errors ?? [];
+if (extensionErrors.length > 0) {
+  throw new Error("packed extension load errors: " + JSON.stringify(extensionErrors));
+}
 const tool = session.getToolByName("zvec_status");
 if (!tool) throw new Error("packed status tool missing");
 const theme = loadThemeSync("dark");
@@ -160,8 +165,22 @@ const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} 
 const component = new ToolExecutionComponent("zvec_status", {}, undefined, tool, ui, root, "packed");
 component.setArgsComplete("packed");
 const result = await tool.execute("packed", {});
+const text = (result?.content ?? [])
+  .filter((p) => p && p.type === "text")
+  .map((p) => p.text ?? "")
+  .join("\\n");
+if (!/Workspace index is ready/.test(text)) {
+  throw new Error(
+    "packed zvec_status result text missing 'Workspace index is ready': " + JSON.stringify(text),
+  );
+}
 component.updateResult(result, false, "packed");
-if (component.render(120).length === 0) throw new Error("packed renderer returned no rows");
+const rendered = component.render(120).join("\\n");
+if (!/index ready/.test(rendered)) {
+  throw new Error(
+    "packed renderer did not emit the custom 'index ready' verdict line: " + JSON.stringify(rendered),
+  );
+}
 await session.dispose();
 console.log("packed SDK load/execute/render passed");`,
     );
