@@ -35,8 +35,11 @@ The local release checks passed:
 - `bun run test:integration` — 8 tests / 23 expectations using the real OMP SDK
   loader and renderer in isolated workers.
 - `bun run test:cli` — contract smoke against the installed `zg 0.2.1`.
-- `bun scripts/validate-pack.mjs` — 17 packed entries, no test/CI/script
-  content, and an out-of-tree public OMP SDK load/execute/render check.
+- Published `@artisann-studios/omp-zvec-grep@0.1.0` is immutable; its exact npm
+  tarball contained 18 entries and passed the release verification.
+- Current main after this documentation cleanup packs 17 entries with
+  `bun scripts/validate-pack.mjs`, no test/CI/script content, and an out-of-tree
+  public OMP SDK load/execute/render check.
 
 The hermetic tests do not use a real index, network, model, or embedding
 service. The opt-in CLI smoke checks the installed `zg` contract without

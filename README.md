@@ -119,9 +119,8 @@ bun test
 bun run test:integration
 ```
 
-`bun run test:cli` is a separate opt-in smoke lane for the real `zg 0.2.1`
-installed on `PATH`; it is not part of the hermetic default tests and may
-prepare a local embedding model if its assertions are expanded.
+`bun run test:cli` is a separate opt-in, model-free smoke lane for the real
+`zg 0.2.1` installed on `PATH`; it is not part of the hermetic default tests.
 
 ## Move old Pi settings (optional)
 
