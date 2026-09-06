@@ -26,9 +26,9 @@
  * Command: `/zg settings` (pi-shepherd's `/shepherd settings` equivalent).
  */
 
-import type { ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
-import { DynamicBorder, getSettingsListTheme } from '@earendil-works/pi-coding-agent';
-import { Container, type SettingItem, SettingsList } from '@earendil-works/pi-tui';
+import type { ExtensionCommandContext } from '@oh-my-pi/pi-coding-agent';
+import { DynamicBorder, getSettingsListTheme } from '@oh-my-pi/pi-coding-agent';
+import { Container, type SettingItem, SettingsList } from '@oh-my-pi/pi-tui';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -185,7 +185,7 @@ export async function openSettings(ctx: ExtensionCommandContext): Promise<void> 
 					list.invalidate();
 				},
 				() => done(undefined), // close menu
-				{ enableSearch: true },
+				{ typeToSearch: true },
 			);
 			container.addChild(list);
 

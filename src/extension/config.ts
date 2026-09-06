@@ -27,7 +27,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { getAgentDir } from '@earendil-works/pi-coding-agent';
+import { getAgentDir } from '@oh-my-pi/pi-utils';
 
 /**
  * Persistent VALUE fields — both layers store them in full. The user file
@@ -66,10 +66,7 @@ export const DEFAULT_SETTINGS: ZvecGrepSettings = {
 };
 
 export function userConfigFile(): string {
-	// getAgentDir() resolves the active agent dir (~/.pi/agent by default,
-	// overridable via the PI_CODING_AGENT_DIR env var). A named per-extension
-	// subdir sits next to pi's own top-level files (settings.json, sessions/).
-	return path.join(getAgentDir(), 'pi-zvec-grep', 'config.json');
+	return path.join(getAgentDir(), 'omp-zvec-grep', 'config.json');
 }
 
 export function projectConfigFile(projectRoot: string): string {
@@ -187,18 +184,45 @@ export function loadSettings(cwd?: string): ZvecGrepSettings {
  */
 export function loadProjectFileValues(projectRoot: string): SettingsValues {
 	const project = readPartialLayer(projectConfigFile(projectRoot));
-	const out = {} as Record<string, unknown>;
-	for (const field of OVERRIDABLE_FIELDS) {
-		const value = (project as Record<string, unknown> | undefined)?.[field];
-		out[field] = value !== undefined ? value : DEFAULT_SETTINGS[field];
+	return {
+		defaultLimit: typeof project?.defaultLimit === 'number' ? project.defaultLimit : DEFAULT_SETTINGS.defaultLimit,
+		autoIndex: typeof project?.autoIndex === 'boolean' ? project.autoIndex : DEFAULT_SETTINGS.autoIndex,
+	};
+}
+
+function readJsonRecord(file: string, strict = false): Record<string, unknown> {
+	if (!fs.existsSync(file)) return {};
+	try {
+		const stat = fs.lstatSync(file);
+		if (stat.isSymbolicLink()) throw new Error(`refusing to write symlinked config: ${file}`);
+		const raw: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+		if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+			if (strict) throw new Error(`config must contain a JSON object: ${file}`);
+			return {};
+		}
+		return { ...(raw as Record<string, unknown>) };
+	} catch (error) {
+		if (strict) throw error;
+		return {};
 	}
-	return out as unknown as SettingsValues;
+}
+
+function assertOwnedProjectRoot(projectRoot: string): string {
+	const realRoot = fs.realpathSync(path.resolve(projectRoot));
+	if (!fs.statSync(realRoot).isDirectory()) throw new Error('projectRoot must be a directory');
+	const directory = path.join(realRoot, '.zvec-grep');
+	if (fs.existsSync(directory)) {
+		const directoryStat = fs.lstatSync(directory);
+		if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) throw new Error('refusing to write through an unsafe .zvec-grep path');
+		if (fs.realpathSync(directory) !== directory) throw new Error('refusing to write through a redirected .zvec-grep path');
+	}
+	const file = path.join(directory, 'config.json');
+	if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) throw new Error('refusing to write symlinked project config');
+	return realRoot;
 }
 
 /**
- * Persist a full settings object.
- *
- * - `user`: writes the values only (the flag is project-file-only) — this
+ * Persist a full settings object while preserving unrelated config keys.
  *   also strips legacy/noise keys (`settingsScope`, stray `projectScope`)
  *   from an old user file on the next save.
  * - `project`: writes the values PLUS the boolean `projectScope` flag from
@@ -210,34 +234,39 @@ export function loadProjectFileValues(projectRoot: string): SettingsValues {
 export function saveSettings(next: ZvecGrepSettings, scope: 'user' | 'project' = 'user', projectRoot?: string): { file: string; created: boolean } {
 	if (scope === 'project') {
 		if (!projectRoot) throw new Error('projectRoot is required to save the project config layer');
-		const file = projectConfigFile(projectRoot);
+		const root = assertOwnedProjectRoot(projectRoot);
+		const file = projectConfigFile(root);
 		const existed = fs.existsSync(file);
 		fs.mkdirSync(path.dirname(file), { recursive: true });
-		const full: Record<string, unknown> = { ...valuesToFull(next), projectScope: next.projectScope };
+		const existing = readJsonRecord(file, true);
+		const full: Record<string, unknown> = { ...existing, ...valuesToFull(next), projectScope: next.projectScope };
 		fs.writeFileSync(file, JSON.stringify(full, null, 2));
-		const partial: Record<string, unknown> = {};
-		for (const [key, value] of Object.entries(full)) partial[key] = value;
-		layerCache.set(file, { mtimeMs: fs.statSync(file).mtimeMs, partial });
+		layerCache.set(file, { mtimeMs: fs.statSync(file).mtimeMs, partial: validateLayer(full) ?? {} });
 		return { file, created: !existed };
 	}
 	const file = userConfigFile();
 	const existed = fs.existsSync(file);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
-	const values = valuesToFull(next);
+	const existing = readJsonRecord(file);
+	const values: Record<string, unknown> = { ...existing, ...valuesToFull(next) };
+	delete values.projectScope;
+	delete values.settingsScope;
 	fs.writeFileSync(file, JSON.stringify(values, null, 2));
-	layerCache.set(file, { mtimeMs: fs.statSync(file).mtimeMs, partial: { ...values } });
+	layerCache.set(file, { mtimeMs: fs.statSync(file).mtimeMs, partial: validateLayer(values) ?? {} });
 	return { file, created: !existed };
 }
 
 /**
- * Turn project scope back off for one workspace: set `projectScope` to
- * false in the project file, preserving every other stored value (they stay
- * dormant) and dropping a legacy `settingsScope` key. No-op when the file is
- * missing, malformed, or already deactivated; the file itself is never
- * deleted; never deletes values. The user file applies again immediately.
+ * Turn project scope back off for one workspace while preserving dormant values
+ * and unrelated project configuration keys.
  */
 export function deactivateProjectScope(projectRoot: string): { changed: boolean } {
-	const file = projectConfigFile(projectRoot);
+	let file: string;
+	try {
+		file = projectConfigFile(assertOwnedProjectRoot(projectRoot));
+	} catch {
+		return { changed: false };
+	}
 	let raw: unknown;
 	try {
 		raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -248,15 +277,12 @@ export function deactivateProjectScope(projectRoot: string): { changed: boolean 
 	const record = raw as Record<string, unknown>;
 	if (record.projectScope === false) return { changed: false };
 	record.projectScope = false;
-	delete record.settingsScope; // legacy key: normalize away on any touch
+	delete record.settingsScope;
 	fs.writeFileSync(file, JSON.stringify(record, null, 2));
 	layerCache.set(file, { mtimeMs: fs.statSync(file).mtimeMs, partial: validateLayer(record) ?? {} });
 	return { changed: true };
 }
 
-/** The value fields of a settings object, in stable order (no flag). */
 function valuesToFull(next: ZvecGrepSettings): SettingsValues {
-	const full = {} as Record<string, unknown>;
-	for (const field of OVERRIDABLE_FIELDS) full[field] = (next as unknown as Record<string, unknown>)[field];
-	return full as unknown as SettingsValues;
+	return { defaultLimit: next.defaultLimit, autoIndex: next.autoIndex };
 }

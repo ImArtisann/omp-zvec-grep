@@ -1,537 +1,383 @@
-/** pi tool + command surface for zvec-grep (zg). */
+/** Native Oh My Pi tool, command, and lifecycle surface for zvec-grep. */
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { keyHint } from '@earendil-works/pi-coding-agent';
-import { Type } from 'typebox';
-import { Text } from '@earendil-works/pi-tui';
-import type { AutocompleteItem } from '@earendil-works/pi-tui';
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExecResult,
+	ToolRenderResultOptions,
+} from '@oh-my-pi/pi-coding-agent';
+import { keyHint, z as hostZod } from '@oh-my-pi/pi-coding-agent';
+import type { Component, AutocompleteItem } from '@oh-my-pi/pi-tui';
+import { Text as TextComponent } from '@oh-my-pi/pi-tui';
+import type { Theme } from '@oh-my-pi/pi-coding-agent';
 import { buildIndexArgs, type ZvecIndexParams } from '../core/indexing.ts';
 import { buildQueryArgs, type ZvecSearchQueryParams } from '../core/queries.ts';
-import { loadSettings } from './config.ts';
-
-/** Hard cap on hits per group — mirrors the zg query limit ceiling. */
-const MAX_SEARCH_LIMIT = 50;
 import {
 	hitHeadline,
 	parseIndexOutput,
 	parseSearchOutput,
 	parseStatusVerdict,
+	type ZgHit,
 	type ZgIndexSummary,
 	type ZgSearchSummary,
 	type ZgStatusVerdict,
 } from '../core/format.ts';
 import { clip, normalizeRoot } from '../core/workspace.ts';
+import { loadSettings } from './config.ts';
 import { openSettings } from './settings-ui.ts';
-import {
-	createZgRunner,
-	ZG_INDEX_TIMEOUT_MS,
-	ZG_STATUS_TIMEOUT_MS,
-} from '../core/zg.ts';
+import { ZG_INDEX_TIMEOUT_MS, ZG_QUERY_TIMEOUT_MS, ZG_STATUS_TIMEOUT_MS } from '../core/zg.ts';
 
-/**
- * Routing guidance baked into tool descriptions: zg is the semantic/layered
- * route; plain `rg` stays the workhorse for exact text (counts, -l, pipes,
- * exit codes), which managed `zg query --rg` deliberately does not replace.
- */
+const MAX_SEARCH_LIMIT = 50;
 const SEARCH_GUIDANCE =
-	'For exact strings, regex, filenames, counts, file lists, or anything piped, use bash rg instead. ' +
-	'Requires a workspace index (zvec_index tool or /zg index); zg reports a clear hint when one is missing.';
+	'For exact strings, regex, filenames, counts, file lists, or anything piped, use native grep/glob/rg instead. ' +
+	'Use zvec_search for semantic or location-unknown discovery; zvec_index is required before searching.';
 
-const searchParams = Type.Object({
-	query: Type.Optional(Type.String({ description: 'One hybrid natural-language or exact query — the usual way to call this tool' })),
-	queries: Type.Optional(Type.Array(Type.String(), { description: 'Explicit hybrid query groups' })),
-	fts: Type.Optional(Type.Array(Type.String(), { description: 'Ranked lexical constraints (identifiers, exact phrases); not an exhaustive occurrence lookup' })),
-	vector: Type.Optional(Type.Array(Type.String(), { description: 'Semantic-only query groups' })),
-	fuse: Type.Optional(Type.Boolean({ description: 'Combine every query group into one ranked list' })),
-	limit: Type.Optional(Type.Number({ description: 'Max items per group (default 7, up to 50)', minimum: 1, maximum: 50 })),
-	globs: Type.Optional(Type.Array(Type.String(), { description: 'Ordered path globs; prefix with ! to exclude' })),
-	fileTypes: Type.Optional(Type.Array(Type.String(), { description: 'ripgrep include types (ts, py, md, ...)' })),
-	excludedFileTypes: Type.Optional(Type.Array(Type.String(), { description: 'ripgrep exclude types' })),
-	symbolTypes: Type.Optional(Type.Array(Type.String(), { description: 'Indexed symbol focus: module, class, interface, function, value, alias' })),
-	preferSymbol: Type.Optional(Type.Boolean({ description: 'Prefer exact indexed symbols' })),
-	modifiedAfter: Type.Optional(Type.String({ description: 'Only files modified after this date/time' })),
-	modifiedBefore: Type.Optional(Type.String({ description: 'Only files modified before this date/time' })),
-	root: Type.Optional(Type.String({ description: 'Workspace root to search; defaults to the current working directory' })),
-});
-
-const indexParams = Type.Object({
-	root: Type.String({ description: 'Workspace root to index (absolute, or relative to cwd)' }),
-	mode: Type.Optional(Type.Union([
-		Type.Literal('index'),
-		Type.Literal('rebuild'),
-		Type.Literal('drop'),
-	], { description: 'index (default): create or incrementally update; rebuild: recreate from scratch; drop: delete the index' })),
-	embedding: Type.Optional(Type.String({ description: 'Embedding model, e.g. local/potion-code-16m-v2 (code) or local/potion-retrieval-32m (text). Defaults to the model zg has configured.' })),
-	globs: Type.Optional(Type.Array(Type.String(), { description: 'Include path globs; prefix with ! to exclude' })),
-	fileTypes: Type.Optional(Type.Array(Type.String(), { description: 'ripgrep include types to index' })),
-	excludedFileTypes: Type.Optional(Type.Array(Type.String(), { description: 'ripgrep exclude types' })),
-	hidden: Type.Optional(Type.Boolean({ description: 'Also index hidden paths (except .git and .zvec-grep)' })),
-});
-
-const statusParams = Type.Object({
-	root: Type.Optional(Type.String({ description: 'Workspace root to check; defaults to the current working directory' })),
-});
-
-/** Cap a call-line display snippet so long args do not stretch the row. */
-const short = (s: string, max = 60): string => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
-
-/** Call-row renderer: reuse the previous Text component (built-in convention). */
-function callRow(context: { lastComponent?: unknown }, content: string): Text {
-	const text = (context.lastComponent as Text | undefined) ?? new Text('', 0, 0);
-	text.setText(content);
-	return text;
-}
-
-/** Theme surface we use (subset of pi's theme object). */
-interface ThemeFg {
-	fg(color: string, s: string): string;
-	bold(s: string): string;
-}
-
-/** Shape of the result object as passed to renderResult by the tool row. */
-interface RenderResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: unknown;
-}
-
-function resultText(result: RenderResult): string {
-	for (const c of result.content) {
-		if (c.type === 'text' && typeof c.text === 'string') return c.text;
-	}
-	return '';
-}
-
-/** Expand hint on collapsed rows; deferred so module import never touches the pi theme. */
-function expandHint(): string {
-	return ' ' + keyHint('app.tools.expand', 'to expand');
-}
-
-/** Minimal result renderer: first few dim lines + expand hint (unknown format). */
-function previewRow(raw: string, theme: ThemeFg, lines = 3): Text {
-	const rows = raw.split('\n');
-	let text = rows.slice(0, lines).map((l) => theme.fg('dim', l)).join('\n');
-	if (rows.length > lines) text += theme.fg('muted', `\n… ${rows.length - lines} more lines${expandHint()}`);
-	return new Text(text, 0, 0);
-}
-
-/** Styled full `zg query` output for expanded rows. */
-function styledSearchOutput(raw: string, theme: ThemeFg): string {
-	return raw
-		.split('\n')
-		.map((l) => {
-			const hm = l.match(/^#(\d+) (matchedBy=\S+ )?(\S.*)$/);
-			if (hm) {
-				return `${theme.fg('muted', `#${hm[1]}`)} ${hm[2] ? theme.fg('dim', hm[2]) : ''}${hm[2] ? ' ' : ''}${theme.fg('accent', hm[3])}`;
-			}
-			if (/^Q\d+ \[/.test(l)) return theme.fg('accent', l);
-			if (/^(query groups|hits:|results:|status:)/.test(l)) return theme.fg('muted', l);
-			if (/^(heading|heading_level|scope|symbol):/.test(l)) return theme.fg('dim', l);
-			if (l.startsWith('…(truncated')) return theme.fg('warning', l);
-			return theme.fg('toolOutput', l);
-		})
-		.join('\n');
-}
-
-/** Render error text: first line in error color, remainder as tool output when expanded. */
-function errorRow(raw: string, theme: ThemeFg, expanded: boolean): Text {
-	const rows = raw.split('\n');
-	const head = rows[0] ?? 'error';
-	let text = theme.fg('error', head);
-	if (expanded && rows.length > 1) {
-		text += '\n' + rows.slice(1).map((l) => theme.fg('toolOutput', l)).join('\n');
-	} else if (rows.length > 1) {
-		text += theme.fg('muted', expandHint());
-	}
-	return new Text(text, 0, 0);
-}
-
-interface IndexRenderState {
-	startedAt?: number;
-	interval?: ReturnType<typeof setInterval>;
-}
-
-/** Styled `zg index` finish block for expanded rows. */
-function styledIndexOutput(raw: string, theme: ThemeFg): string {
-	return raw
-		.split('\n')
-		.map((l) => {
-			if (l.startsWith('tip\t')) return theme.fg('dim', l);
-			if (l.startsWith('Workspace index')) return theme.fg('accent', l);
-			return theme.fg('toolOutput', l);
-		})
-		.join('\n');
-}
-
-/** Search tool params as the LLM sees them (root optional, cwd fallback). */
 export type SearchToolInput = ZvecSearchQueryParams & { root?: string };
+export type IndexToolInput = ZvecIndexParams;
 export type StatusToolInput = { root?: string };
 
-/** Register zvec_search / zvec_index / zvec_status. */
+function makeSearchParams(z: typeof hostZod) {
+	return z.object({
+		query: z.string().describe('One hybrid natural-language or exact query').optional(),
+		queries: z.array(z.string()).describe('Explicit hybrid query groups').optional(),
+		fts: z.array(z.string()).describe('Ranked lexical query groups').optional(),
+		vector: z.array(z.string()).describe('Semantic-only query groups').optional(),
+		fuse: z.boolean().describe('Combine every query group into one ranked list').optional(),
+		limit: z.number().min(1).max(50).describe('Maximum hits per group (default 7, cap 50)').optional(),
+		globs: z.array(z.string()).describe('Include/exclude path globs').optional(),
+		fileTypes: z.array(z.string()).describe('Included file types').optional(),
+		excludedFileTypes: z.array(z.string()).describe('Excluded file types').optional(),
+		symbolTypes: z.array(z.string()).describe('Indexed symbol kinds').optional(),
+		preferSymbol: z.boolean().describe('Prefer exact indexed symbols').optional(),
+		modifiedAfter: z.string().describe('Only files modified after this timestamp').optional(),
+		modifiedBefore: z.string().describe('Only files modified before this timestamp').optional(),
+		root: z.string().describe('Workspace root; defaults to the current working directory').optional(),
+	});
+}
+function makeIndexParams(z: typeof hostZod) {
+	return z.object({
+		root: z.string().describe('Workspace root to index'),
+		mode: z.enum(['index', 'rebuild', 'drop']).describe('index, rebuild, or drop').optional(),
+		embedding: z.string().describe('Embedding model configured for zg').optional(),
+		globs: z.array(z.string()).describe('Include/exclude path globs').optional(),
+		fileTypes: z.array(z.string()).describe('Included file types').optional(),
+		excludedFileTypes: z.array(z.string()).describe('Excluded file types').optional(),
+		hidden: z.boolean().describe('Include hidden paths').optional(),
+	});
+}
+function makeStatusParams(z: typeof hostZod) {
+	return z.object({ root: z.string().describe('Workspace root; defaults to the current working directory').optional() });
+}
+
+type ZgExec = (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeout?: number }) => Promise<ExecResult>;
+
+function errorFromExec(error: unknown, action: string, signal?: AbortSignal): Error {
+	if (signal?.aborted) return new Error(`${action} cancelled`);
+	if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') return new Error(`${action} unavailable: zg CLI was not found`);
+	return new Error(`${action} could not run: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+async function runZg(exec: ZgExec, args: string[], options: { cwd: string; signal?: AbortSignal; timeoutMs: number }, action: string): Promise<ExecResult> {
+	let result: ExecResult;
+	try {
+		result = await exec('zg', args, { cwd: options.cwd, signal: options.signal, timeout: options.timeoutMs });
+	} catch (error) {
+		throw errorFromExec(error, action, options.signal);
+	}
+	if (result.killed) {
+		if (options.signal?.aborted) throw new Error(`${action} cancelled`);
+		throw new Error(`${action} timed out after ${Math.round(options.timeoutMs / 1000)}s`);
+	}
+	return result;
+}
+function validHit(value: unknown): value is ZgHit {
+	if (typeof value !== 'object' || value === null) return false;
+	if (!('file' in value) || !('label' in value) || !('preview' in value)) return false;
+	return (value.file === undefined || typeof value.file === 'string') && (value.label === undefined || typeof value.label === 'string') && (value.preview === undefined || typeof value.preview === 'string');
+}
+function validSearchSummary(value: unknown): value is ZgSearchSummary {
+	if (typeof value !== 'object' || value === null) return false;
+	const summary = value as Partial<ZgSearchSummary>;
+	return typeof summary.totalHits === 'number' && typeof summary.fileCount === 'number' && typeof summary.hasStale === 'boolean' && Array.isArray(summary.groups) && (summary.top === undefined || validHit(summary.top));
+}
+function validIndexSummary(value: unknown): value is ZgIndexSummary {
+	if (typeof value !== 'object' || value === null) return false;
+	const summary = value as Partial<ZgIndexSummary>;
+	return typeof summary.scanned === 'number' && typeof summary.added === 'number' && typeof summary.modified === 'number' && typeof summary.deleted === 'number';
+}
+function searchSummaryFromDetails(details: unknown): ZgSearchSummary | undefined {
+	if (typeof details !== 'object' || details === null || !('summary' in details)) return undefined;
+	return validSearchSummary(details.summary) ? details.summary : undefined;
+}
+function indexSummaryFromDetails(details: unknown): ZgIndexSummary | undefined {
+	if (typeof details !== 'object' || details === null || !('indexSummary' in details)) return undefined;
+	return validIndexSummary(details.indexSummary) ? details.indexSummary : undefined;
+}
+function verdictFromDetails(details: unknown, raw: string): ZgStatusVerdict | undefined {
+	if (typeof details === 'object' && details !== null && 'verdict' in details && typeof details.verdict === 'object' && details.verdict !== null && 'kind' in details.verdict && 'line' in details.verdict && typeof details.verdict.kind === 'string' && typeof details.verdict.line === 'string') {
+		return details.verdict as ZgStatusVerdict;
+	}
+	return parseStatusVerdict(raw);
+}
+function resultText(result: { content?: Array<{ type: string; text?: string }> }): string {
+	return result.content?.find((content) => content.type === 'text' && typeof content.text === 'string')?.text ?? '';
+}
+function component(text: string): Component {
+	return new TextComponent(text, 0, 0);
+}
+function short(text: string, max = 60): string {
+	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+function expandHint(): string {
+	return ` ${keyHint('app.tools.expand', 'to expand')}`;
+}
+function previewRow(raw: string, theme: Theme, lines = 3): Component {
+	const rows = raw.split('\n');
+	let text = rows.slice(0, lines).map((line) => theme.fg('dim', line)).join('\n');
+	if (rows.length > lines) text += theme.fg('muted', `\n… ${rows.length - lines} more lines${expandHint()}`);
+	return component(text);
+}
+function errorRow(raw: string, theme: Theme, expanded: boolean): Component {
+	const rows = raw.split('\n');
+	let text = theme.fg('error', rows[0] || 'error');
+	if (expanded && rows.length > 1) text += `\n${rows.slice(1).map((line) => theme.fg('toolOutput', line)).join('\n')}`;
+	else if (rows.length > 1) text += theme.fg('muted', expandHint());
+	return component(text);
+}
+function styledSearchOutput(raw: string, theme: Theme): string {
+	return raw.split('\n').map((line) => {
+		const hit = line.match(/^#(\d+) (matchedBy=\S+ )?(\S.*)$/);
+		if (hit) return `${theme.fg('muted', `#${hit[1]}`)} ${hit[2] ? theme.fg('dim', hit[2]) : ''}${hit[2] ? ' ' : ''}${theme.fg('accent', hit[3])}`;
+		if (/^Q\d+ \[/.test(line)) return theme.fg('accent', line);
+		if (/^(query groups|hits:|results:|status:)/.test(line)) return theme.fg('muted', line);
+		if (/^(heading|heading_level|scope|symbol):/.test(line)) return theme.fg('dim', line);
+		if (line.startsWith('…(truncated')) return theme.fg('warning', line);
+		return theme.fg('toolOutput', line);
+	}).join('\n');
+}
+function styledIndexOutput(raw: string, theme: Theme): string {
+	return raw.split('\n').map((line) => line.startsWith('tip\t') ? theme.fg('dim', line) : line.startsWith('Workspace index') ? theme.fg('accent', line) : theme.fg('toolOutput', line)).join('\n');
+}
+
 export function registerZvecTools(pi: ExtensionAPI): void {
-	const runZg = createZgRunner((command, args, options) => pi.exec(command, args, options));
+	const searchParams = makeSearchParams(pi.zod);
+	const indexParams = makeIndexParams(pi.zod);
+	const statusParams = makeStatusParams(pi.zod);
+	const exec: ZgExec = (command, args, options) => pi.exec(command, args, options);
 
 	pi.registerTool({
-		name: 'zvec_search',
-		label: 'Zvec Search',
-		description:
-			'Hybrid semantic + keyword search over a locally indexed workspace (zvec-grep). ' +
-			'Use it when the answer is grounded in local files and the wording or location is unknown: ' +
-			'fuzzy concepts, relationships, call chains, cross-file synthesis, "where is X handled", design-rationale questions. ' +
-			`Returns ranked hits with file, line range, symbols, and matching source. ${SEARCH_GUIDANCE}`,
-		promptSnippet: 'Semantic + exact hybrid search over the indexed workspace (local zvec-grep)',
-		promptGuidelines: [
-			'Use zvec_search for meaning-based or location-unknown workspace questions; keep bash grep for exact strings, regex, counts, and file lists.',
-		],
-		parameters: searchParams,
-		async execute(_toolCallId: string, params: SearchToolInput, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
-			// Effective limit: explicit tool-call param wins; otherwise the
-			// per-workspace config default (the project file when its
-			// projectScope flag is true, else the user file); hard cap 50.
-			const defaultLimit = Math.min(Math.max(Math.round(loadSettings(ctx.cwd).defaultLimit), 1), MAX_SEARCH_LIMIT);
-			const args = buildQueryArgs(params, {
-				limit: params.limit !== undefined ? Math.min(Math.max(Math.round(params.limit), 1), MAX_SEARCH_LIMIT) : defaultLimit,
-			});
-			const { stdout, stderr, code } = await runZg(args, { cwd: normalizeRoot(params.root, ctx.cwd), signal });
-			if (code !== 0) {
-				throw new Error(stderr || stdout || `zvec_search failed (exit ${code})`);
-			}
-			const summary = parseSearchOutput(stdout);
-			return {
-				content: [{ type: 'text' as const, text: clip(stdout) }],
-				details: summary ? { summary } : {},
-			};
+		name: 'zvec_search', label: 'Zvec Search', approval: 'exec', parameters: searchParams,
+		description: 'Hybrid semantic + keyword search over a locally indexed workspace. ' + SEARCH_GUIDANCE,
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const started = Date.now();
+			const settings = loadSettings(ctx.cwd);
+			const limit = params.limit === undefined ? settings.defaultLimit : Math.min(Math.max(Math.round(params.limit), 1), MAX_SEARCH_LIMIT);
+			const args = buildQueryArgs(params, { limit });
+			const root = normalizeRoot(params.root, ctx.cwd);
+			const result = await runZg(exec, args, { cwd: root, signal, timeoutMs: ZG_QUERY_TIMEOUT_MS }, 'zvec_search');
+			if (result.code !== 0) throw new Error(result.stderr || result.stdout || `zvec_search failed (exit ${result.code})`);
+			const stdout = result.stdout.trimEnd();
+			return { content: [{ type: 'text' as const, text: clip(stdout) }], details: { summary: parseSearchOutput(stdout), durationMs: Date.now() - started } };
 		},
-		renderCall(args, theme, context) {
+		renderCall(args, _options, theme) {
 			const a = args as SearchToolInput;
-			const groupCount = (a.query ? 1 : 0) + (a.queries?.length ?? 0) + (a.fts?.length ?? 0) + (a.vector?.length ?? 0);
-			const query = a.query ?? a.queries?.[0] ?? a.fts?.[0] ?? a.vector?.[0] ?? '';
-			let line = theme.fg('toolTitle', theme.bold('zvec_search'));
-			if (query) line += ` ${theme.fg('accent', `"${short(query)}"`)}`;
-			if (groupCount > 1) line += ` ${theme.fg('dim', `+${groupCount - 1} more`)}`;
-			if (a.root) line += ` ${theme.fg('toolOutput', `in ${a.root}`)}`;
-			const filters = [...(a.fileTypes ?? []), ...(a.excludedFileTypes ?? []).map((f) => `!${f}`), ...(a.globs ?? []), ...(a.symbolTypes ?? [])];
-			if (filters.length > 0) line += ` ${theme.fg('dim', `(${filters.join(', ')})`)}`;
+			const groups = (a.query ? 1 : 0) + (a.queries?.length ?? 0) + (a.fts?.length ?? 0) + (a.vector?.length ?? 0);
+			const query = a.query ?? a.queries?.[0] ?? a.fts?.[0] ?? a.vector?.[0] ?? '(missing query)';
+			let line = `${theme.fg('toolTitle', theme.bold('zvec_search'))} ${theme.fg('accent', `"${short(query)}"`)}`;
+			if (groups > 1) line += ` ${theme.fg('dim', `+${groups - 1} more`)}`;
+			if (a.root) line += ` ${theme.fg('toolOutput', `in ${short(a.root)}`)}`;
+			const filters = [...(a.fileTypes ?? []), ...(a.excludedFileTypes ?? []).map((value) => `!${value}`), ...(a.globs ?? []), ...(a.symbolTypes ?? [])];
+			if (filters.length) line += ` ${theme.fg('dim', `(${filters.join(', ')})`)}`;
 			if (a.limit !== undefined) line += ` ${theme.fg('dim', `limit ${a.limit}`)}`;
-			return callRow(context, line);
+			return component(line);
 		},
-		renderResult(result: RenderResult, options: { expanded: boolean; isPartial: boolean }, theme: ThemeFg, context: { isError?: boolean }) {
-			if (options.isPartial) return new Text(theme.fg('warning', 'searching…'), 0, 0);
-			const raw = resultText(result);
-			if (context.isError || raw.trimStart().startsWith('Error:')) {
-				return errorRow(raw, theme, options.expanded);
-			}
-			const summary = (result.details as { summary?: ZgSearchSummary } | undefined)?.summary;
-			if (options.expanded) {
-				const styled = summary ? styledSearchOutput(raw, theme) : raw;
-				return new Text(theme.fg('toolOutput', styled), 0, 0);
-			}
+		renderResult(result, options: ToolRenderResultOptions, theme) {
+			if (options.isPartial) return component(theme.fg('warning', 'searching…'));
+			const raw = resultText(result) || '(zvec_search returned no output)';
+			if (result.isError || raw.trimStart().startsWith('Error:')) return errorRow(raw, theme, options.expanded);
+			const summary = searchSummaryFromDetails(result.details);
+			if (options.expanded) return component(theme.fg('toolOutput', summary ? styledSearchOutput(raw, theme) : raw));
 			if (!summary) return previewRow(raw, theme);
-			if (summary.totalHits === 0) {
-				return new Text(theme.fg('muted', 'no hits'), 0, 0);
-			}
+			if (summary.totalHits === 0) return component(theme.fg('muted', 'no hits'));
 			let line = theme.fg('success', `✓ ${summary.totalHits} hit${summary.totalHits === 1 ? '' : 's'} · ${summary.fileCount} file${summary.fileCount === 1 ? '' : 's'}`);
 			if (summary.hasStale) line += theme.fg('warning', ' · stale');
 			line += theme.fg('muted', expandHint());
-			if (summary.top) line += '\n' + theme.fg('muted', `   ${hitHeadline(summary.top)}`);
-			return new Text(line, 0, 0);
+			if (summary.top) line += `\n${theme.fg('muted', `   ${hitHeadline(summary.top)}`)}`;
+			const duration = (result.details as { durationMs?: number } | undefined)?.durationMs;
+			if (duration !== undefined) line += theme.fg('dim', ` · ${duration}ms`);
+			return component(line);
 		},
 	});
 
 	pi.registerTool({
-		name: 'zvec_index',
-		label: 'Zvec Index',
-		description:
-			'Create, update, rebuild, or drop the local zvec-grep workspace index for a directory. ' +
-			'Call it once before zvec_search when a workspace has no index (zvec_search reports the missing index). ' +
-			'Do not rebuild an existing index or drop one unless the user explicitly asks. ' +
-			'Prefer a local model (local/potion-code-16m-v2 for code, local/potion-retrieval-32m for text) — it auto-downloads once and stays on this machine.',
-		promptSnippet: 'Build/update/drop the local workspace index used by zvec_search',
-		parameters: indexParams,
-		async execute(_toolCallId: string, params: ZvecIndexParams, signal: AbortSignal | undefined, onUpdate: unknown, ctx: ExtensionContext) {
-			const resolvedRoot = normalizeRoot(params.root, ctx.cwd);
-			const args = buildIndexArgs(params, resolvedRoot);
-			(onUpdate as ((u: { content: Array<{ type: string; text: string }> }) => void) | undefined)?.({
-				content: [{ type: 'text', text: `${params.mode ?? 'index'}ing ${resolvedRoot}…` }],
-			});
-			const { stdout, stderr, code } = await runZg(args, {
-				cwd: resolvedRoot,
-				signal,
-				timeoutMs: ZG_INDEX_TIMEOUT_MS,
-			});
-			if (code !== 0) {
-				throw new Error(stderr || stdout || `zvec_index failed (exit ${code})`);
-			}
-			return {
-				content: [{ type: 'text' as const, text: clip(stdout || stderr || `zvec index finished for ${resolvedRoot}`) }],
-				details: parseIndexOutput(stdout) ? { indexSummary: parseIndexOutput(stdout) } : {},
-			};
+		name: 'zvec_index', label: 'Zvec Index', approval: 'write', parameters: indexParams,
+		description: 'Create or update a local zvec-grep index. Rebuild and drop are destructive; only use them when explicitly requested. ' + SEARCH_GUIDANCE,
+		async execute(_id, params, signal, onUpdate, ctx) {
+			const started = Date.now();
+			const root = normalizeRoot(params.root, ctx.cwd);
+			const args = buildIndexArgs(params as ZvecIndexParams, root);
+			onUpdate?.({ content: [{ type: 'text', text: `${params.mode ?? 'index'}ing ${root}…` }] });
+			const result = await runZg(exec, args, { cwd: root, signal, timeoutMs: ZG_INDEX_TIMEOUT_MS }, 'zvec_index');
+			if (result.code !== 0) throw new Error(result.stderr || result.stdout || `zvec_index failed (exit ${result.code})`);
+			const stdout = result.stdout.trimEnd();
+			return { content: [{ type: 'text' as const, text: clip(stdout || `zvec index finished for ${root}`) }], details: { indexSummary: parseIndexOutput(stdout), durationMs: Date.now() - started } };
 		},
-		renderCall(args, theme, context) {
-			const a = args as ZvecIndexParams;
+		renderCall(args, _options, theme) {
+			const a = args as IndexToolInput;
 			const mode = a.mode ?? 'index';
-			let line = theme.fg('toolTitle', theme.bold('zvec_index'));
+			let line = `${theme.fg('toolTitle', theme.bold('zvec_index'))} ${theme.fg('toolOutput', short(a.root || '(missing root)'))}`;
 			if (mode !== 'index') line += ` ${theme.fg(mode === 'drop' ? 'error' : 'warning', mode)}`;
-			line += ` ${theme.fg('toolOutput', a.root)}`;
-			if (a.embedding) line += ` ${theme.fg('dim', `· ${a.embedding}`)}`;
-			return callRow(context, line);
+			return component(line);
 		},
-		renderResult(result: RenderResult, options: { expanded: boolean; isPartial: boolean }, theme: ThemeFg, context: { isError?: boolean; state?: unknown; invalidate(): void }) {
-			const state = (context.state ?? {}) as IndexRenderState;
-			if (options.isPartial) {
-				// Live elapsed timer while zg runs (bash-renderer pattern).
-				state.startedAt ??= Date.now();
-				state.interval ??= setInterval(() => context.invalidate(), 1000);
-				const secs = Math.floor((Date.now() - state.startedAt) / 1000);
-				return new Text(theme.fg('warning', `indexing… ${secs}s`), 0, 0);
-			}
-			if (state.interval) {
-				clearInterval(state.interval);
-				state.interval = undefined;
-			}
-			const raw = resultText(result);
-			if (context.isError || raw.trimStart().startsWith('Error:')) {
-				return errorRow(raw, theme, options.expanded);
-			}
-			const summary = (result.details as { indexSummary?: ZgIndexSummary } | undefined)?.indexSummary;
-			if (options.expanded) {
-				return new Text(theme.fg('toolOutput', summary ? styledIndexOutput(raw, theme) : raw), 0, 0);
-			}
-			if (summary) {
-				const changed = summary.added + summary.modified + summary.deleted;
-				let line = theme.fg('success', `✓ index updated · ${summary.scanned} files · ${summary.entities ?? '–'} entities · ${summary.duration ?? '–'}`);
-				line += theme.fg('muted', expandHint());
-				if (changed > 0) {
-					const bits = [
-						summary.added > 0 ? `${summary.added} added` : '',
-						summary.modified > 0 ? `${summary.modified} modified` : '',
-						summary.deleted > 0 ? `${summary.deleted} deleted` : '',
-					].filter(Boolean);
-					line += '\n' + theme.fg('dim', `   ${bits.join(' · ')}`);
-				}
-				return new Text(line, 0, 0);
-			}
-			return previewRow(raw, theme);
+		renderResult(result, options: ToolRenderResultOptions, theme) {
+			if (options.isPartial) return component(theme.fg('warning', 'indexing…'));
+			const raw = resultText(result) || '(zvec_index returned no output)';
+			if (result.isError || raw.trimStart().startsWith('Error:')) return errorRow(raw, theme, options.expanded);
+			const summary = indexSummaryFromDetails(result.details);
+			if (options.expanded) return component(theme.fg('toolOutput', summary ? styledIndexOutput(raw, theme) : raw));
+			if (!summary) return previewRow(raw, theme);
+			const changed = summary.added + summary.modified + summary.deleted;
+			let line = theme.fg('success', `✓ index updated · ${summary.scanned} files · ${summary.entities ?? '–'} entities · ${summary.duration ?? '–'}`);
+			line += theme.fg('muted', expandHint());
+			if (changed > 0) line += `\n${theme.fg('dim', `   ${[summary.added && `${summary.added} added`, summary.modified && `${summary.modified} modified`, summary.deleted && `${summary.deleted} deleted`].filter(Boolean).join(' · ')}`)}`;
+			const duration = (result.details as { durationMs?: number } | undefined)?.durationMs;
+			if (duration !== undefined) line += theme.fg('dim', ` · ${duration}ms`);
+			return component(line);
 		},
 	});
 
 	pi.registerTool({
-		name: 'zvec_status',
-		label: 'Zvec Status',
-		description:
-			'Show zvec-grep workspace state: index presence, coverage, freshness, and the suggested next action for a workspace root. ' +
-			'Use to check whether an index is ready or stale before or after heavy edits. A missing index is a normal state, not an error.',
-		promptSnippet: 'Show zvec-grep index state/freshness for a workspace',
-		parameters: statusParams,
-		async execute(_toolCallId: string, params: StatusToolInput, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
-			const { stdout, stderr } = await runZg(['status'], {
-				cwd: normalizeRoot(params.root, ctx.cwd),
-				signal,
-				timeoutMs: ZG_STATUS_TIMEOUT_MS,
-			});
-			// A missing index must not surface as a tool error — it is the normal
-			// pre-`zvec_index` state and the agent should react to the hint text.
+		name: 'zvec_status', label: 'Zvec Status', approval: 'read', parameters: statusParams,
+		description: 'Show zvec-grep index presence, coverage, and freshness. Missing or stale indices are normal status outcomes, not tool failures.',
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const root = normalizeRoot(params.root, ctx.cwd);
+			const result = await runZg(exec, ['status'], { cwd: root, signal, timeoutMs: ZG_STATUS_TIMEOUT_MS }, 'zvec_status');
+			const stdout = result.stdout.trimEnd();
+			const stderr = result.stderr.trimEnd();
+			const verdict = parseStatusVerdict(stdout || stderr);
+			if (result.code !== 0 && verdict?.kind !== 'missing' && verdict?.kind !== 'needs-update') {
+				throw new Error(stderr || stdout || `zvec_status failed (exit ${result.code})`);
+			}
 			const text = clip(stdout || stderr || '(no output)');
-			const verdict = parseStatusVerdict(stdout);
-			return {
-				content: [{ type: 'text' as const, text }],
-				details: verdict ? { verdict } : {},
-			};
+			return { content: [{ type: 'text' as const, text }], details: { verdict }, isError: false };
 		},
-		renderCall(args, theme, context) {
+		renderCall(args, _options, theme) {
 			const root = (args as StatusToolInput).root;
-			return callRow(context, `${theme.fg('toolTitle', theme.bold('zvec_status'))} ${theme.fg('toolOutput', root ?? '(cwd)')}`);
+			return component(`${theme.fg('toolTitle', theme.bold('zvec_status'))} ${theme.fg('toolOutput', root ? short(root) : '(cwd)')}`);
 		},
-		renderResult(result: RenderResult, options: { expanded: boolean; isPartial: boolean }, theme: ThemeFg, _context: { isError?: boolean }) {
-			if (options.isPartial) return new Text(theme.fg('muted', 'checking…'), 0, 0);
-			const raw = resultText(result);
-			const verdict = (result.details as { verdict?: ZgStatusVerdict } | undefined)?.verdict ?? parseStatusVerdict(raw);
+		renderResult(result, options: ToolRenderResultOptions, theme) {
+			if (options.isPartial) return component(theme.fg('muted', 'checking…'));
+			const raw = resultText(result) || '(zvec_status returned no output)';
+			const verdict = verdictFromDetails(result.details, raw);
 			if (!options.expanded) {
 				if (!verdict) return previewRow(raw, theme, 2);
 				const color = verdict.kind === 'ready' ? 'success' : verdict.kind === 'needs-update' ? 'warning' : 'muted';
-				const long = raw.split('\n').length > 4;
-				return new Text(theme.fg(color, verdict.line) + (long ? theme.fg('muted', expandHint()) : ''), 0, 0);
+				return component(theme.fg(color, verdict.line) + (raw.split('\n').length > 4 ? theme.fg('muted', expandHint()) : ''));
 			}
-			return new Text(raw.split('\n').map((l) => theme.fg('toolOutput', l)).join('\n'), 0, 0);
+			return component(raw.split('\n').map((line) => theme.fg('toolOutput', line)).join('\n'));
 		},
 	});
 }
 
-/** /zg subcommands: first-token dispatch, shown in arg autocomplete and help. */
 const ZG_SUBCOMMANDS: Array<{ name: string; description: string }> = [
 	{ name: 'index', description: 'build or update the workspace index' },
-	{ name: 'rebuild', description: 'recreate the index from scratch' },
-	{ name: 'drop', description: 'permanently delete the index' },
-	{ name: 'status', description: 'show index state for the workspace' },
-	{ name: 'settings', description: 'open settings (scope, default limit) — user or project config' },
-	{ name: 'help', description: 'show /zg usage' },
+	{ name: 'rebuild', description: 'recreate the index from scratch (destructive)' },
+	{ name: 'drop', description: 'permanently delete the index (destructive)' },
+	{ name: 'status', description: 'show index state' },
+	{ name: 'settings', description: 'open settings' },
+	{ name: 'help', description: 'show usage' },
 ];
+const COMMANDS = new Set(['index', 'rebuild', 'drop', 'status', 'settings', 'help']);
+const USAGE = ['Usage: /zg <index|rebuild|drop|status|settings|help> [path]', '  path is the whole remainder and may be quoted when it contains spaces.', '  rebuild and drop are destructive and require explicit user intent.'].join('\n');
 
-type ZgMode = 'index' | 'rebuild' | 'drop';
-type ZgCommand = ZgMode | 'status' | 'settings' | 'help';
-
-const ZG_COMMANDS: readonly ZgCommand[] = ['index', 'rebuild', 'drop', 'status', 'settings', 'help'];
-
-const isZgCommand = (s: string): s is ZgCommand => (ZG_COMMANDS as readonly string[]).includes(s);
-
-/**
- * Split /zg arguments into [command, rootArg]. Bare `/zg` (or `/zg help`)
- * shows usage; otherwise the first token must be a known subcommand.
- * Discriminated on `command` so callers can narrow after early returns.
- */
-function parseZgCommand(args: string):
-	| { command: 'help' }
-	| { command: 'settings' }
-	| { command: ZgMode | 'status'; rootArg?: string }
-	| { command: 'unknown'; unknown: string } {
-	const tokens = args.trim().split(/\s+/).filter(Boolean);
-	const first = tokens[0];
-	if (!first) return { command: 'help' };
-	if (first === 'settings') return { command: 'settings' };
-	if (isZgCommand(first)) return { command: first, rootArg: tokens[1] };
-	return { command: 'unknown', unknown: args.trim() };
+function parseCommand(args: string): { command: string; root?: string } {
+	const input = args.trim();
+	if (!input) return { command: 'help' };
+	const match = input.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+	const command = match?.[1] ?? '';
+	const remainder = match?.[2]?.trim();
+	if (!remainder) return { command };
+	if (remainder.startsWith('"') && remainder.endsWith('"')) return { command, root: remainder.slice(1, -1) };
+	if (remainder.startsWith("'") && remainder.endsWith("'")) return { command, root: remainder.slice(1, -1) };
+	return { command, root: remainder };
 }
-
-/** First token typed after `/zg` → subcommand items; none once a second token is entered. */
-function zgArgumentCompletions(prefix: string): AutocompleteItem[] | null {
-	const p = (prefix ?? '').trimStart();
-	if (p.includes(' ')) return null;
-	return ZG_SUBCOMMANDS.map((s) => ({ value: s.name, label: s.name, description: s.description })).filter((i) => i.value.startsWith(p));
+function commandCompletions(prefix: string): AutocompleteItem[] | null {
+	const value = (prefix ?? '').trimStart();
+	if (value.includes(' ')) return null;
+	return ZG_SUBCOMMANDS.filter((item) => item.name.startsWith(value)).map((item) => ({ value: item.name, label: item.name, description: item.description }));
 }
-
-/** Help text shown for bare `/zg`, `/zg help`, and unknown subcommands. */
-const ZG_USAGE = [
-	'Usage: /zg <subcommand> [path]',
-	'  <subcommand>  one of: index | rebuild | drop | status | settings | help',
-	'  [path]        workspace root for index/rebuild/drop/status (default: current directory)',
-	'',
-	'Examples:',
-	'  /zg index',
-	'  /zg index ~/code/proj',
-	'  /zg status .',
-	'  /zg settings',
-].join('\n');
-
-/**
- * Shared /zg handler logic: run the requested command against the workspace
- * root the user asked for (cwd-pinned so zg resolves the right index).
- */
-async function runZgCommand(
-	parsed: { command: ZgMode | 'status'; rootArg?: string },
-	cwd: string,
-	exec: (command: string, args: string[], options: { cwd?: string; timeout?: number }) => Promise<{ stdout: string; stderr: string; code: number }>,
-	notify: (message: string, type: 'info' | 'warning' | 'error') => void,
-): Promise<void> {
-	const { command, rootArg } = parsed;
-	if (command === 'status') {
-		const root = normalizeRoot(rootArg, cwd);
-		const { stdout, stderr, code } = await exec('zg', ['status'], { cwd: root, timeout: ZG_STATUS_TIMEOUT_MS });
-		notify(stdout || stderr || '(no output)', code !== 0 ? 'warning' : 'info');
+async function runCommand(parsed: { command: string; root?: string }, ctx: ExtensionCommandContext, exec: ZgExec): Promise<void> {
+	if (parsed.command === 'help' || !COMMANDS.has(parsed.command)) {
+		ctx.ui.notify(parsed.command === 'help' ? USAGE : `Unknown /zg subcommand: ${parsed.command}\n\n${USAGE}`, 'warning');
 		return;
 	}
-	// index / rebuild / drop (command is narrowed to ZgMode past the early returns)
-	const mode: ZgMode = command;
-	const root = normalizeRoot(rootArg, cwd);
-	notify(`Running zg ${mode} for ${root}… (this can take a while)`, 'info');
-	const argv = ['index', root];
-	if (mode === 'rebuild') argv.push('--rebuild');
-	if (mode === 'drop') argv.push('--drop', '--yes');
-	const { stdout, stderr, code } = await exec('zg', argv, { cwd: root, timeout: ZG_INDEX_TIMEOUT_MS });
-	if (code !== 0) {
-		notify(`zg ${mode} failed: ${stderr || stdout || `exit ${code}`}`, 'error');
+	if (parsed.command === 'settings') {
+		if (!ctx.hasUI || ctx.mode !== 'tui') {
+			ctx.ui.notify('/zg settings requires the interactive TUI.', 'warning');
+			return;
+		}
+		await openSettings(ctx);
 		return;
 	}
-	notify(mode === 'drop' ? 'zvec index dropped.' : 'zvec index updated.', 'info');
+	const root = normalizeRoot(parsed.root, ctx.cwd);
+	if (parsed.command === 'drop' || parsed.command === 'rebuild') ctx.ui.notify(`Explicit destructive operation: ${parsed.command} for ${root}…`, 'warning');
+	const mode = parsed.command as 'index' | 'rebuild' | 'drop' | 'status';
+	const commandArgs = mode === 'status' ? ['status'] : ['index', root, ...(mode === 'rebuild' ? ['--rebuild'] : mode === 'drop' ? ['--drop', '--yes'] : [])];
+	let result: ExecResult;
+	try {
+		result = await runZg(exec, commandArgs, { cwd: root, timeoutMs: mode === 'status' ? ZG_STATUS_TIMEOUT_MS : ZG_INDEX_TIMEOUT_MS }, `zg ${mode}`);
+	} catch (error) {
+		ctx.ui.notify(error instanceof Error ? error.message : String(error), 'error');
+		return;
+	}
+	if (result.code !== 0) {
+		const verdict = parseStatusVerdict(result.stdout || result.stderr);
+		if (mode === 'status' && (verdict?.kind === 'missing' || verdict?.kind === 'needs-update')) {
+			ctx.ui.notify(result.stdout || result.stderr || verdict.line, 'warning');
+			return;
+		}
+		ctx.ui.notify(`zg ${mode} failed: ${result.stderr || result.stdout || `exit ${result.code}`}`, 'error');
+		return;
+	}
+	ctx.ui.notify(mode === 'status' ? result.stdout || result.stderr || '(no output)' : mode === 'drop' ? 'zvec index dropped.' : 'zvec index updated.', 'info');
 }
 
-/** Shared /zg command handler: parse the subcommand, then run it. */
-function zgHandler(exec: (command: string, args: string[], options: { cwd?: string; timeout?: number }) => Promise<{ stdout: string; stderr: string; code: number }>) {
-	return async (args: string, ctx: ExtensionContext) => {
-		const parsed = parseZgCommand(args);
-		const notify = (message: string, type: 'info' | 'warning' | 'error') => {
-			if (ctx.hasUI) ctx.ui.notify(message, type);
-		};
-		if (parsed.command === 'unknown') {
-			notify(`Unknown /zg subcommand: ${parsed.unknown}\n\n${ZG_USAGE}`, 'warning');
-			return;
-		}
-		if (parsed.command === 'help') {
-			notify(ZG_USAGE, 'info');
-			return;
-		}
-		// The settings menu is an interactive TUI surface (SettingsList inline in
-		// the editor slot); it cannot render in non-interactive runs. Notify
-		// directly — ui.notify works even where hasUI is false (print/RPC modes).
-		if (parsed.command === 'settings') {
-			if (!ctx.hasUI) {
-				ctx.ui?.notify?.('/zg settings requires the interactive TUI.', 'warning');
-				return;
-			}
-			await openSettings(ctx as ExtensionCommandContext);
-			return;
-		}
-		await runZgCommand(parsed, ctx.cwd, exec, notify);
-	};
+export function registerZvecCommands(pi: ExtensionAPI): void {
+	const exec: ZgExec = (command, args, options) => pi.exec(command, args, options);
+	pi.registerCommand('zg', {
+		description: 'zvec-grep: /zg <index|rebuild|drop|status|settings|help> [path]',
+		getArgumentCompletions: commandCompletions,
+		handler: async (args, ctx) => runCommand(parseCommand(args), ctx, exec),
+	});
 }
-
-/**
- * Auto-index on session start (setting: `autoIndex`, off by default).
- *
- * Fires on every `session_start` reason (deliberately no reason filter): the
- * first step is `zg status --check-ready`, and the index is only built or
- * updated when that guard fails, so the steady-state cost on a healthy index
- * is one fast status call. The build runs fire-and-forget — never awaited
- * and never throwing into the lifecycle hook — and failures end up as
- * `ui.notify` only. An in-flight per-root set prevents a concurrent build
- * from being restarted while one is running. The hook is always registered;
- * the setting is read fresh on each start, so the menu toggle takes effect
- * from the next session start.
- */
 export function registerAutoIndex(pi: ExtensionAPI): void {
 	const inflight = new Set<string>();
-	const notify = (ctx: { ui?: { notify?: (message: string, type?: string) => void } }, message: string, type: 'info' | 'error'): void => {
-		try {
-			ctx.ui?.notify?.(message, type);
-		} catch {
-			// A notification failure must never escape into the lifecycle hook.
-		}
-	};
+	const shutdown = new AbortController();
+	pi.on('session_shutdown', () => shutdown.abort());
 	pi.on('session_start', (_event, ctx) => {
-		const cwd = ctx.cwd;
-		if (!loadSettings(cwd).autoIndex) return;
-		const root = normalizeRoot(undefined, cwd);
-		if (inflight.has(root)) return;
+		const root = normalizeRoot(undefined, ctx.cwd);
+		if (!loadSettings(root).autoIndex || inflight.has(root) || shutdown.signal.aborted) return;
 		inflight.add(root);
 		void (async () => {
 			try {
-				const check = await pi.exec('zg', ['status', '--check-ready'], { cwd: root, timeout: ZG_STATUS_TIMEOUT_MS });
-				if (check.code === 0) return; // index ready: nothing to do
-				notify(ctx, `zvec: index missing or stale — building in background…`, 'info');
-				const result = await pi.exec('zg', ['index', root], { cwd: root, timeout: ZG_INDEX_TIMEOUT_MS });
-				if (result.code !== 0) {
-					const detail = (result.stderr || result.stdout || `exit ${result.code}`).split('\n')[0];
-					notify(ctx, `zvec: auto index failed: ${detail}`, 'error');
+				const check = await runZg((command, args, options) => pi.exec(command, args, options), ['status', '--check-ready'], { cwd: root, signal: shutdown.signal, timeoutMs: ZG_STATUS_TIMEOUT_MS }, 'zvec auto-index readiness check');
+				const statusText = `${check.stdout}\n${check.stderr}`;
+				const verdict = parseStatusVerdict(statusText);
+				if (check.code === 0 || verdict?.kind === 'ready') return;
+				if (verdict?.kind !== 'missing' && verdict?.kind !== 'needs-update') {
+					ctx.ui.notify(`zvec: readiness check failed: ${check.stderr || check.stdout || `exit ${check.code}`}`, 'error');
 					return;
 				}
-				notify(ctx, `zvec: index updated for ${root}`, 'info');
-			} catch {
-				notify(ctx, 'zvec: auto index failed (zg could not be run)', 'error');
+				if (shutdown.signal.aborted) return;
+				ctx.ui.notify('zvec: index missing or stale — building in background…', 'info');
+				const result = await runZg((command, args, options) => pi.exec(command, args, options), ['index', root], { cwd: root, signal: shutdown.signal, timeoutMs: ZG_INDEX_TIMEOUT_MS }, 'zvec auto-index');
+				if (result.code !== 0 && !shutdown.signal.aborted) ctx.ui.notify(`zvec: auto index failed: ${result.stderr || result.stdout || `exit ${result.code}`}`, 'error');
+				else if (!shutdown.signal.aborted) ctx.ui.notify(`zvec: index updated for ${root}`, 'info');
+			} catch (error) {
+				if (!shutdown.signal.aborted) ctx.ui.notify(`zvec: auto index failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
 			} finally {
 				inflight.delete(root);
 			}
 		})();
-	});
-}
-
-/**
- * Register the /zg command: one slash command with subcommand dispatch
- * (index | rebuild | drop | status | settings | help) and argument completion.
- */
-export function registerZvecCommands(pi: ExtensionAPI): void {
-	const exec = (command: string, args: string[], options: { cwd?: string; timeout?: number }) => pi.exec(command, args, options);
-
-	pi.registerCommand('zg', {
-		description: 'zvec-grep: build index, check status, settings — /zg <index|rebuild|drop|status|settings|help> [path]',
-		getArgumentCompletions: (prefix: string) => zgArgumentCompletions(prefix),
-		handler: zgHandler(exec),
 	});
 }
