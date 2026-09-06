@@ -2,17 +2,18 @@
 
 The native extension publishes as the **public** npm package
 `@artisann-studios/omp-zvec-grep` (anyone can install it), and the GitHub
-repository is public. The 0.1.0 release below is the cutover in progress: the
-package identity, publish workflow, and guards are in place, and the actual
-`npm publish` is executed only through the explicit publish.yml workflow after
-the release checks pass. Entries describe the current working tree on
+repository is public. The 0.1.0 release below was published 2026-09-05;
+subsequent releases run only through the explicit publish.yml workflow after the
+release checks pass. Entries describe the current working tree on
 `feat/native-omp-port`.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-09-05)
 
 Initial public native Oh My Pi port of `pi-zvec-grep` v0.3.1, pinned to OMP
 18.1.11 and the upstream `zg` 0.2.1 CLI, published scoped as
-`@artisann-studios/omp-zvec-grep` (`publishConfig.access: public`).
+`@artisann-studios/omp-zvec-grep@0.1.0` (`publishConfig.access: public`),
+verified by an anonymous no-auth install and a real OMP SDK load/execute/render
+of the published artifact.
 
 ### Added
 

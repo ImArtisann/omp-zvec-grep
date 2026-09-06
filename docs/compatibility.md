@@ -148,9 +148,14 @@ auto-index lifecycle hardening and the native renderer-edge coverage:
   `6c27cb4`): both `Verify (ubuntu-latest)` (Linux x64) and `Verify (macos-15)`
   (Apple Silicon) completed **success**. The push/PR matrix never publishes; the
   package is published public only through the explicit publish workflow. A
-  later public-release push produces a distinct run, recorded here when it
-  happens.
+  later public-head push (run `34005227676` at `ad05bba`) also completed
+  **success** on both matrix OS.
 - Package identity (0.1.0 cutover): the native extension is published public as
   `@artisann-studios/omp-zvec-grep` (`publishConfig.access: public`), and the
   GitHub repository is public; its runtime/config identity is unchanged
   (`omp-zvec-grep` user config dir and tool/command names are stable).
+- Published release (2026-09-05): `@artisann-studios/omp-zvec-grep@0.1.0` was
+  published to the npm registry (public) and verified end to end — an anonymous
+  no-auth `npm install` succeeds, and an isolated real-OMP SDK load of the
+  installed artifact executes `zvec_status` against a fake `zg` and renders the
+  custom `index ready` verdict with no extension-load errors.
