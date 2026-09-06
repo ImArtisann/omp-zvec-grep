@@ -28,6 +28,7 @@
         "LICENSE",
         "UPSTREAM.md",
         "README.md",
+        "CHANGELOG.md",
         "docs"
     ],
     "engines": {

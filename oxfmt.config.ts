@@ -1,0 +1,46 @@
+import { defineConfig } from "oxfmt";
+
+export default defineConfig({
+    printWidth: 100,
+    overrides: [
+        {
+            files: ["**/*.md"],
+            options: {
+                printWidth: 80,
+                proseWrap: "always",
+            },
+        },
+    ],
+    tabWidth: 4,
+    semi: true,
+    singleQuote: false,
+    sortPackageJson: false,
+    ignorePatterns: [
+        "node_modules/**",
+        "dist/**",
+        "lib/**",
+        ".tmp/**",
+        ".turbo/**",
+        "out-tsc/**",
+        ".alchemy/**",
+        ".wrangler/**",
+        ".dev.vars",
+        ".env",
+        ".env.local",
+        "bun.lock",
+        ".expo/**",
+        ".expo-shared/**",
+        "web-build/**",
+        "android/**",
+        "ios/**",
+        "apps/*/dist/**",
+        "apps/*/lib/**",
+        "apps/*/.expo/**",
+        "apps/*/.alchemy/**",
+        "apps/*/.wrangler/**",
+        "apps/*/android/**",
+        "apps/*/ios/**",
+        "packages/backend/confect/_generated/**",
+        "packages/backend/convex/_generated/**",
+    ],
+});
