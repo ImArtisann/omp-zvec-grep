@@ -7,7 +7,8 @@ Recorded before native source edits on 2026-09-05.
 - Repository: `https://github.com/MikkelKappelPersson/pi-zvec-grep`
 - Exact cloned SHA: `db7b42db4a84dc724c3347fbcc2bdf32792882d6`
 - Upstream release: `v0.3.1`
-- Git remote is retained as `upstream`; this port is developed on `feat/native-omp-port`.
+- Git remote is retained as `upstream`; this port is developed on
+  `feat/native-omp-port`.
 
 ## Runtime releases
 
@@ -22,26 +23,75 @@ Recorded before native source edits on 2026-09-05.
 
 The inherited upstream baseline has two intentionally separate lanes:
 
-1. **Hermetic lane (default):** the test harness prepends a deterministic fake `zg` executable to `PATH`; it uses no installed zvec CLI, model, network, or embedding downloads. The pure core and extension-surface checks run against that fake. This is the reproducible default for development and CI.
-2. **Real CLI lane (opt-in):** `test/verify-cli.mjs` invokes the installed `zg` executable and therefore depends on the pinned released CLI, its local model/cache state, and the fixture workspace. It is not part of the hermetic default.
+1. **Hermetic lane (default):** the test harness prepends a deterministic fake
+   `zg` executable to `PATH`; it uses no installed zvec CLI, model, network, or
+   embedding downloads. The pure core and extension-surface checks run against
+   that fake. This is the reproducible default for development and CI.
+2. **Real CLI lane (opt-in):** `test/verify-cli.mjs` invokes the installed `zg`
+   executable and therefore depends on the pinned released CLI, its local
+   model/cache state, and the fixture workspace. It is not part of the hermetic
+   default.
 
-The native port must keep these lanes separate. No extension-load path may install or download `zg`, models, or network resources.
+The native port must keep these lanes separate. No extension-load path may
+install or download `zg`, models, or network resources.
 
 ## Recorded upstream baseline outcome
 
-Command: `npm test` from the cloned v0.3.1 tree on Bun 1.4.2 / Node 22.22.0 (2026-09-05).
+Command: `npm test` from the cloned v0.3.1 tree on Bun 1.4.2 / Node 22.22.0
+(2026-09-05).
 
-- The real CLI lane (`npm run cli:test`) passed all assertions, including `zg --version` = `0.2.1`, query/index flags, managed `rg` behavior, and no-index diagnostics.
-- The hermetic surface lane (`npm run surface:test`) ran 71 assertions: 66 passed and 5 failed because macOS temporary-directory paths were compared lexically (`/private/var/...` observed by the harness vs `/var/...` expected). The failures were `search cwd resolved relative to ctx.cwd`, `search cwd falls back to ctx.cwd`, `index cwd is the workspace root`, `/zg status <path> pins cwd`, and `/zg index <path> indexes the named workspace`.
-- Because the inherited `npm test` chain stops at the surface lane, the remaining pure hermetic suites were run individually: `verify-queries.mjs` 21 passed; `verify-indexing.mjs` 17 passed; `verify-errors.mjs` 10 passed; `verify-settings.mjs` all assertions passed; `verify-format.mjs` all assertions passed.
-- `verify-autoindex.mjs` failed at its first assertion (`autoIndex on + ready: the guard ran`; observed `undefined`, expected `true`) after package metadata was replaced while source was still unedited; its legacy registration path is incompatible with the native metadata. This is retained as a baseline observation, not treated as a native-port result.
+- The real CLI lane (`npm run cli:test`) passed all assertions, including
+  `zg --version` = `0.2.1`, query/index flags, managed `rg` behavior, and
+  no-index diagnostics.
+- The hermetic surface lane (`npm run surface:test`) ran 71 assertions: 66
+  passed and 5 failed because macOS temporary-directory paths were compared
+  lexically (`/private/var/...` observed by the harness vs `/var/...` expected).
+  The failures were `search cwd resolved relative to ctx.cwd`,
+  `search cwd falls back to ctx.cwd`, `index cwd is the workspace root`,
+  `/zg status <path> pins cwd`, and
+  `/zg index <path> indexes the named workspace`.
+- Because the inherited `npm test` chain stops at the surface lane, the
+  remaining pure hermetic suites were run individually: `verify-queries.mjs` 21
+  passed; `verify-indexing.mjs` 17 passed; `verify-errors.mjs` 10 passed;
+  `verify-settings.mjs` all assertions passed; `verify-format.mjs` all
+  assertions passed.
+- `verify-autoindex.mjs` failed at its first assertion
+  (`autoIndex on + ready: the guard ran`; observed `undefined`, expected `true`)
+  after package metadata was replaced while source was still unedited; its
+  legacy registration path is incompatible with the native metadata. This is
+  retained as a baseline observation, not treated as a native-port result.
 
 ## Native bring-up evidence
 
+(Corrected in place 2026-09-05: the PTY incident disclosure and the cancellation
+evidence below were updated to match the later host-verification results instead
+of preserving earlier inaccurate wording.)
+
 - `bun run typecheck` passes against OMP 18.1.11 public declarations.
-- A real disposable fixture indexed successfully with the installed `zg 0.2.1`: one file scanned/added, one entity, then status reported 100% ready and a semantic query returned `auth.ts:1` (`matchedBy=fts+vector`). The first local model preparation downloaded 16 KiB; this was explicit smoke work, never extension-load behavior.
-- Actual OMP 18.1.11 PTY loaded the absolute extension path and rendered `/zg help` and `/zg settings`; SettingsList navigation changed auto-index, save persisted it on reopen, and Esc restored the editor. The first PTY used the normal agent profile; its temporary config was removed after the smoke. Subsequent host tests must set `PI_CODING_AGENT_DIR` to a disposable directory before process launch.
-- A fresh SDK wrapper/render smoke was attempted but blocked by the locally installed OMP native addon leaf not being discoverable from Bun's cache (`pi_natives.darwin-arm64.node` resolution failure). This is an environment prerequisite for the host harness, not a zvec/model installation requirement.
+- A real disposable fixture indexed successfully with the installed `zg 0.2.1`:
+  one file scanned/added, one entity, then status reported 100% ready and a
+  semantic query returned `auth.ts:1` (`matchedBy=fts+vector`). The first local
+  model preparation downloaded 16 KiB; this was explicit smoke work, never
+  extension-load behavior.
+- Actual OMP 18.1.11 PTY loaded the absolute extension path and rendered
+  `/zg help` and `/zg settings`; SettingsList navigation changed auto-index,
+  save persisted it on reopen, and Esc restored the editor; the same flow later
+  passed in an isolated environment. **Incident disclosure (2026-09-05):** the
+  first PTY ran under the normal (non-isolated) agent profile, and its
+  `/zg settings` save wrote `autoIndex: true` to the real user-config path
+  `~/.omp/agent/omp-zvec-grep/config.json`. That file was then removed without a
+  prior stat or read, so its pre-existence cannot be established; targeted
+  recovery found no backup, and it cannot be claimed that no user config was
+  lost. The user was informed. The isolated rerun (disposable
+  `PI_CODING_AGENT_DIR` and `HOME`, `OMP_SKIP_SETUP=1`, absolute extension path)
+  passed: `/zg help`; `/zg settings`, DOWN DOWN ENTER changed auto-index, save;
+  Esc restored the editor; reopening showed the setting on; Esc. Rule for host
+  tests: set `PI_CODING_AGENT_DIR` (and `HOME`) to disposable directories before
+  process launch — never the normal profile.
+- A fresh SDK wrapper/render smoke was attempted but blocked by the locally
+  installed OMP native addon leaf not being discoverable from Bun's cache
+  (`pi_natives.darwin-arm64.node` resolution failure). This is an environment
+  prerequisite for the host harness, not a zvec/model installation requirement.
 
 Exact real-CLI fixture lines:
 
@@ -54,4 +104,28 @@ status-after: Coverage  ██████████████████�
 query-after: #1 matchedBy=fts+vector auth.ts:1
 ```
 
-The first direct cancellation attempt completed its tiny fixture rebuild before SIGINT could interrupt it; it is not counted as cancellation proof. No cancellation claim is made without a sufficiently large active fixture.
+The first direct cancellation attempt completed its tiny fixture rebuild before
+SIGINT could interrupt it; it is not counted as cancellation proof. A later
+active cancellation proof used a disposable fixture of 20,000 files:
+`zg index . --rebuild` was interrupted with SIGINT after about one second while
+the index was actively building, yielding `status: null`, `signal: SIGINT`,
+`interrupted: true`; the fixture was removed afterwards.
+
+## Final native port suite results (2026-09-05)
+
+Recorded from the final local run on macOS arm64 with Bun 1.4.2:
+
+- `bun run check` — PASS (typecheck, oxlint, format check; one pre-existing
+  unicorn warning in `test/helpers/session-worker.ts`).
+- `bun test` — PASS, 16 tests / 68 expectations across 6 files (hermetic
+  default; deterministic fake `zg`, no network/model).
+- `bun run test:integration` — PASS, 7 tests / 21 expectations.
+- `bun run test:cli` — PASS against the real installed `zg 0.2.1`.
+- Real CLI cancellation — proven separately (20k-file fixture, SIGINT; see
+  above).
+- Limitation: the packed-validator host loader/render probe still fails on this
+  machine because the installed OMP native addon leaf is not resolvable from
+  Bun's cache (`pi_natives.darwin-arm64.node`); this is the same local
+  environment prerequisite recorded above, not a zvec/model installation
+  requirement. CI lanes on GitHub are defined but had not run at the time of
+  this record.
