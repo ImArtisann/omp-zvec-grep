@@ -1,9 +1,38 @@
-# Release checklist — private 0.1.0 cutover
+# Release checklist — restricted @artisann-studios/omp-zvec-grep 0.1.0
 
-This checklist validates the private `0.1.0` native port cutover.
-`omp-zvec-grep` is **never published**: no `npm publish`, no public visibility,
-no GitHub Release, and no npm OIDC/trusted-publishing configuration exists.
-"Release" here means recording the cutover state and proving it end to end.
+This checklist covers the first restricted release of the native port:
+`@artisann-studios/omp-zvec-grep@0.1.0`, published to the npm registry org
+`artisann-studios` as a **restricted (org-private)** package. The package is
+**never public**, and the GitHub repository
+(`https://github.com/ImArtisann/omp-zvec-grep`) **stays private**. "Release"
+means publishing the restricted package and proving it end to end.
+
+## Publication prerequisites (external, one-time)
+
+- [ ] An npm account that is a **member of the `artisann-studios` org** with
+      write access to the `omp-zvec-grep` package/scope.
+- [ ] The npm org plan **allows private (restricted) packages**. A free-plan org
+      cannot host restricted scoped packages; if restricted is unavailable,
+      publication must stop and be reported — do not publish publicly.
+- [ ] A **Granular Access Token (GAT)** for that account: scope limited to the
+      `@artisann-studios/omp-zvec-grep` package, permission **Read and write**,
+      **Bypass 2FA** enabled (a CI job cannot answer an OTP), expiry **≤ 90
+      days** (classic/legacy tokens were removed by npm in Nov 2025 and cannot
+      be used). The token is stored only as the GitHub Actions secret
+      `NPM_TOKEN` on the private repo — never in the tree or logs. A brand-new
+      package may not yet be selectable in the granular-token UI; if so, do
+      **not** mint an all-org/all-packages write credential. Prefer an
+      authenticated local bootstrap publish that creates the package, then mint
+      the exact-package GAT for the workflow. If that is not possible, mint the
+      shortest-lived org-scope token for the single first release and
+      revoke/replace it with an exact-package token as soon as the package
+      exists. Record token **metadata only** (scope, expiry, secret name) here —
+      never the token value. No org membership changes, billing/plan purchases,
+      or public access are made as part of this.
+- [ ] Trusted publishing / OIDC is **not** configured (a token was requested);
+      it would avoid a stored token and add provenance, but requires wiring npm
+      trusted-publisher settings for the workflow. If that route is preferred
+      later, revisit this checklist before switching.
 
 ## Reference pins
 
@@ -20,14 +49,17 @@ See `docs/compatibility.md` for the baseline and evidence.
 ## Local preflight (developer machine, macOS arm64)
 
 - [ ] `bun install --frozen-lockfile` succeeds
-- [ ] `bun run check` passes (typecheck, lint, format:check)
+- [ ] `bun run check` passes warning-free (typecheck, lint, format:check)
 - [ ] `bun test` passes (hermetic default; deterministic fake `zg`, no network)
 - [ ] `bun run test:integration` passes (explicit hermetic suites)
 - [ ] `bun run test:cli` passes against the installed `zg 0.2.1` (real-CLI
       contract; requires the pinned CLI on `PATH`, model-free today)
-- [ ] `bun scripts/validate-pack.mjs` passes: private guard, no publish
-      script/workflow, exact pack contents (no `test/`, `.github/`, `scripts/`
-      in the tarball), out-of-tree install, entry present
+- [ ] `bun scripts/validate-pack.mjs` passes the scoped restricted guards:
+      `name` = `@artisann-studios/omp-zvec-grep`, not `private`,
+      `publishConfig.access` = `restricted`, `publish.yml` present, exact pack
+      contents (no `test/`, `.github/`, `scripts/` in the tarball), and a real
+      out-of-tree install whose public-SDK load/execute/render proves the real
+      status result renders the custom `index ready` verdict
 - [ ] Record actual suite counts in `docs/compatibility.md` from the runs above
       (no fabricated numbers)
 
@@ -37,41 +69,59 @@ Push/PR runs of `.github/workflows/ci.yml` consume normal Actions minutes on the
 private repo; that is planned and allowed. A workflow being present is not a
 result — only an actual green run is.
 
-- [ ] Push the cutover branch and open the PR to `main`; the CI matrix job
-      passes on `ubuntu-latest` (Linux x64) and `macos-15` (Apple Silicon)
-- [ ] Review the real-CLI lane consciously: `real-zg-smoke` is manual-only
-      (`workflow_dispatch`). Trigger it and confirm `bun run test:cli` passes
-      with the pinned `zg` installed by the job. It stays opt-in because an
-      index-building assertion would download a local embedding model on first
-      build
-- [ ] Run "Release validation (manual, no publish)" from Actions on the cutover
-      branch or tag: it runs check + hermetic suites + pack validation and never
-      requests publish permissions. When run on a tag, the tag must equal
-      `v0.1.0` (`scripts/validate-pack.mjs --tag` enforces the match)
+- [ ] Push the release branch; the CI matrix job passes on `ubuntu-latest`
+      (Linux x64) and `macos-15` (Apple Silicon)
+- [ ] Optionally trigger the real-CLI lane consciously: `real-zg-smoke` is
+      manual-only (`workflow_dispatch`) and installs the pinned `zg` in the job;
+      it stays opt-in because future index-building assertions would download a
+      local embedding model on first build
 - [ ] Record in `docs/compatibility.md` that these GitHub runs happened and what
-      they showed
+      they showed (e.g. run `34004218551` at `6c27cb4` was green on both OS)
 
-## If a tag is used for the cutover
+## Publish (restricted, explicit)
+
+- [ ] Confirm `NPM_TOKEN` is set as an Actions secret on the private repo
+- [ ] Run "Publish (scoped, restricted)" from Actions (`workflow_dispatch`) on
+      the release commit, **or** push tag `v0.1.0` (the workflow triggers on
+      `v*` tags and `validate-pack.mjs --tag` enforces the tag equals the
+      package version). The workflow runs the full verification then publishes
+- [ ] Only the publish step uses `NPM_TOKEN`; the repo and workflow request no
+      provenance (not wired), no upstream target, and no public access
+
+## Verify the published artifact
+
+- [ ] `npm view @artisann-studios/omp-zvec-grep@0.1.0` shows the version,
+      restricted access, and expected dist integrity
+- [ ] An isolated authenticated
+      `npm install     @artisann-studios/omp-zvec-grep@0.1.0` (member token)
+      succeeds and loads through the actual OMP loader/render, not just the pack
+      probe
+- [ ] Confirm access stays restricted (no public visibility flag)
+- [ ] Record the publish + verification result in `docs/compatibility.md`
+
+## If a git tag is used
 
 - [ ] Tag must be exactly `v0.1.0` (matches `package.json` version; enforced by
       the validation script)
-- [ ] Tags stay private-repo-internal; do not create a GitHub Release, do not
-      publish anything
+- [ ] Tags stay private-repo-internal; no GitHub Release is created
 
 ## Explicit non-goals (never steps)
 
-- [ ] No `npm publish` (no authorization; package must stay `private: true`)
-- [ ] No npm OIDC token or trusted-publishing configuration is added
-- [ ] No public visibility of the repo or any artifact
+- [ ] No public visibility: the package stays `restricted`, the repo stays
+      private
+- [ ] No npm OIDC/trusted-publishing configuration is added (token route is
+      used); no provenance is forced where the registry/repo do not support it
+- [ ] Nothing ever targets or pushes to the upstream `pi-zvec-grep` repo, and no
+      token grants anything there
 - [ ] No automatic migration or deletion of old Pi-era configs or indexes; the
       opt-in transfer helper is copy-only (see `docs/pi-config-migration.md`)
-- [ ] No claim that untested CI lanes have run
+- [ ] No claim that a publish ran until an actual publish is observed
+- [ ] No auto broad staging of user-owned repo tooling (`.coderabbit.yaml`,
+      `.husky/`, `tools/`, etc.)
 
 ## Before any future public step (not planned)
 
-- [ ] Verify npm name availability for the intended package name (never checked;
-      do not assume)
-- [ ] Verify registry requirements (package, provenance, access tokens) and
-      obtain explicit authorization — none exists today
-- [ ] Revisit this checklist and the release-validation workflow before any
-      publication is considered
+- [ ] Verify registry requirements and obtain explicit authorization — none
+      exists today for public publication
+- [ ] Revisit this checklist and the publish/release workflows before any change
+      to package visibility is considered

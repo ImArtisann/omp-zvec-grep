@@ -27,11 +27,24 @@ per-action timeouts.
 
 ## Install
 
-There is **no published package**: `package.json` is `private: true`, nothing is
-published to npm (the npm name availability has not been checked and no
-publication is authorized), and the repo
-`https://github.com/ImArtisann/omp-zvec-grep` is private. Every install route
-below requires access to that repository or a local checkout.
+The extension publishes to the npm registry under the restricted scope
+`@artisann-studios/omp-zvec-grep` — org-private, so only npm accounts authorized
+in the `artisann-studios` org (with a scoped read/write access token) can
+install it. It is never public. The GitHub repository
+`https://github.com/ImArtisann/omp-zvec-grep` is also private. Both routes below
+require that org/repo access.
+
+**From npm (published artifact)** — the OMP 18.1.11 plugin CLI accepts npm
+specs, so a member of `@artisann-studios` installs the pinned release with:
+
+```sh
+omp plugin install @artisann-studios/omp-zvec-grep@0.1.0
+```
+
+This resolves against the org registry and needs an authenticated npm session
+for a member account. It is only available after the restricted release has
+actually been published (see `docs/release-checklist.md`); nothing below claims
+a publish that has not run.
 
 **One-off session load** — from the checkout root, load the extension for that
 launch only (no persistent change):
@@ -52,15 +65,13 @@ omp plugin link /absolute/path/to/omp-zvec-grep
 
 `omp plugin link` resolves the path against the current directory, so pass an
 absolute path; it reads `package.json` (this package is
-`name: "omp-zvec-grep"`). `omp plugin install /absolute/path` routes local paths
-through the same link flow — either verb works for a directory. New sessions
-load the linked plugin.
+`name: "@artisann-studios/omp-zvec-grep"`). `omp plugin install /absolute/path`
+routes local paths through the same link flow — either verb works for a
+directory. New sessions load the linked plugin.
 
 **From the private GitHub repo** — git must authenticate (SSH key or a PAT with
 repository scope); an unauthenticated clone is not possible for a private repo.
-There is no npm/marketplace/git-URL shorthand to install from: the OMP 18.1.11
-plugin CLI accepts local paths, npm specs, and marketplace names, and this
-package is not published anywhere. Clone with access, then link:
+Clone with access, then link:
 
 ```sh
 git clone https://github.com/ImArtisann/omp-zvec-grep.git
@@ -167,8 +178,9 @@ take a while and may download the local embedding model.
 
 ## Development and CI
 
-Requires Bun `1.4.2+` and the OMP `18.1.11` dev pins. No command publishes this
-private package.
+Requires Bun `1.4.2+` and the OMP `18.1.11` dev pins. No command here publishes
+the package; the restricted `@artisann-studios/omp-zvec-grep` release happens
+only through the explicit publish workflow (`.github/workflows/publish.yml`).
 
 ```sh
 bun install --frozen-lockfile

@@ -1,13 +1,18 @@
 # Changelog
 
-`omp-zvec-grep` is a private package: nothing below has been published, no
-release tags exist yet, and no public visibility is planned. Entries describe
-the current working tree on `feat/native-omp-port`.
+The native extension publishes as the restricted (org-private) npm package
+`@artisann-studios/omp-zvec-grep` — it is never public, and the source
+repository stays private. The 0.1.0 restricted release below is the cutover in
+progress: the package identity, publish workflow, and guards are in place, and
+the actual `npm publish` is executed only through the explicit publish.yml
+workflow after the release checks pass. Entries describe the current working
+tree on `feat/native-omp-port`.
 
 ## 0.1.0 (unreleased)
 
-Initial private native Oh My Pi port of `pi-zvec-grep` v0.3.1, pinned to OMP
-18.1.11 and the upstream `zg` 0.2.1 CLI.
+Initial restricted native Oh My Pi port of `pi-zvec-grep` v0.3.1, pinned to OMP
+18.1.11 and the upstream `zg` 0.2.1 CLI, published scoped as
+`@artisann-studios/omp-zvec-grep` (`publishConfig.access: restricted`).
 
 ### Added
 
@@ -30,13 +35,17 @@ Initial private native Oh My Pi port of `pi-zvec-grep` v0.3.1, pinned to OMP
   explicit real-CLI contract smoke lane (`bun run test:cli`) against the
   installed `zg` 0.2.1; no model, network, or skip gates in the hermetic
   default.
-- Pack and install validation script (`scripts/validate-pack.mjs`): enforces
-  `private: true`, absence of any publish script/workflow, exact pack contents,
-  and a real out-of-tree install; tag/version agreement when invoked with a tag.
+- Pack and install validation script (`scripts/validate-pack.mjs`): enforces the
+  scoped restricted identity (`name` = `@artisann-studios/omp-zvec-grep`, not
+  `private`, `publishConfig.access` = `restricted`), no in-repo publish script,
+  the presence of the publish workflow, exact pack contents, and a real
+  out-of-tree install; tag/version agreement when invoked with a tag.
 - CI: push/PR verification matrix (Linux x64 and macOS Apple Silicon) for the
   frozen install, check, hermetic tests, and pack validation; a manual-only
-  real-`zg` smoke job; and a manual, read-only release-validation workflow. No
-  CI lane publishes or has been claimed to have run on GitHub.
+  real-`zg` smoke job; a manual, read-only release-validation workflow; and an
+  explicit manual/tag publish workflow (`publish.yml`) that re-runs the checks
+  and publishes restricted with the `NPM_TOKEN` secret. Push/PR CI never
+  publishes; only the explicit publish workflow does.
 - Documentation: upstream compatibility baseline and evidence
   (`docs/compatibility.md`), explicit opt-in migration guide with a copy-only
   transfer snippet for Pi-era user settings (`docs/pi-config-migration.md`), and

@@ -1,10 +1,12 @@
 {
-    "name": "omp-zvec-grep",
+    "name": "@artisann-studios/omp-zvec-grep",
     "version": "0.1.0",
-    "private": true,
     "type": "module",
     "description": "Native Oh My Pi zvec-grep search, indexing, and status tools",
     "license": "Apache-2.0",
+    "publishConfig": {
+        "access": "restricted"
+    },
     "homepage": "https://github.com/ImArtisann/omp-zvec-grep",
     "repository": {
         "type": "git",

@@ -1,0 +1,81 @@
+name: Publish (scoped, restricted)
+
+# Publishes @artisann-studios/omp-zvec-grep@0.1.0 to the npm registry org
+# artisann-studios as a RESTRICTED (org-private) package. The GitHub repo
+# stays private. Triggered only manually (workflow_dispatch) or by pushing a
+# v<version> tag. It re-runs the full local verification (frozen install,
+# typecheck/lint/format, hermetic + integration suites, pack validation with
+# tag/version agreement) and only then publishes.
+#
+# The publish step is the ONLY step that touches the npm token. Permissions
+# are least-privilege (contents: read). Nothing here targets or pushes to the
+# upstream repository. No provenance is requested: generating npm provenance
+# requires trusted-publishing/OIDC wiring, which is intentionally not set up
+# (and provenance from a private GitHub repo is not assumed supported).
+# Restricted publish requires the org plan that allows private packages and an
+# authenticated npm account with write access to @artisann-studios (via the
+# NPM_TOKEN GitHub Actions secret).
+
+on:
+    workflow_dispatch:
+    push:
+        tags:
+            - "v*"
+
+permissions:
+    contents: read
+
+jobs:
+    publish:
+        name: Validate and publish (restricted)
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out
+              uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.2
+
+            - name: Set up Node for npm
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22.x
+                  registry-url: https://registry.npmjs.org
+
+            - name: Install frozen dependencies
+              run: bun install --frozen-lockfile
+
+            - name: Typecheck, lint, and format check
+              run: bun run check
+
+            - name: Hermetic default test suite (fake zg, no network)
+              run: bun test
+
+            - name: Hermetic integration suites
+              run: bun run test:integration
+
+            - name: Validate pack contents, tag/version, out-of-tree install
+              # When triggered by a tag push, RELEASE_TAG is the tag and
+              # validate-pack.mjs --tag enforces tag == v<package version>
+              # (mandatory; a mismatch fails the job before any publish).
+              # On a manual branch dispatch RELEASE_TAG is empty and no tag
+              # assertion applies.
+              env:
+                  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+              run: bun scripts/validate-pack.mjs --tag "$RELEASE_TAG"
+
+            - name: Publish restricted package
+              # publishConfig.access is "restricted" in package.json, so this
+              # never publishes publicly. NODE_AUTH_TOKEN is the least-privilege
+              # granular access token stored in the NPM_TOKEN secret. --ignore-
+              # scripts ensures the package's lifecycle/prepare/husky hooks
+              # (dev tooling) never execute with the token in the environment.
+              # This is the ONLY step with NODE_AUTH_TOKEN; no step prints the
+              # token or any .npmrc/auth contents.
+              run: npm publish --ignore-scripts
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

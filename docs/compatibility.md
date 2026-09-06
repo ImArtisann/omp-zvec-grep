@@ -144,6 +144,13 @@ auto-index lifecycle hardening and the native renderer-edge coverage:
   evidence.
 - Real CLI cancellation — proven separately (20k-file fixture, SIGINT; see
   above).
-- CI lanes on GitHub (`ubuntu-latest` Linux x64 and `macos-15` Apple Silicon)
-  are defined by `.github/workflows/ci.yml`; whether they run green is
-  established only by an actual GitHub run, recorded after this baseline.
+- CI on GitHub — verified green on the first push (run `34004218551` at
+  `6c27cb4`): both `Verify (ubuntu-latest)` (Linux x64) and `Verify (macos-15)`
+  (Apple Silicon) completed **success**. The push/PR matrix never publishes; the
+  package is published restricted only through the explicit publish workflow. A
+  later scoped-release push produces a distinct run, recorded here when it
+  happens.
+- Package identity (0.1.0 cutover): the native extension is published restricted
+  as `@artisann-studios/omp-zvec-grep` (`publishConfig.access: restricted`); its
+  runtime/config identity is unchanged (`omp-zvec-grep` user config dir and
+  tool/command names are stable).

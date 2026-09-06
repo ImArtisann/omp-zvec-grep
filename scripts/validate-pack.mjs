@@ -36,14 +36,30 @@ function run(cmd, argsList, options = {}) {
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
-// --- Non-publishing guards ------------------------------------------------
-if (pkg.private !== true)
-    throw new Error("package.json must stay private: true (no publishing authorized)");
+// --- Scoped restricted-publication guards --------------------------------
+// 0.1.0 is authorized to publish as a restricted (org-private) package under
+// @artisann-studios. The repo itself stays private; the tarball must never be
+// public and no publish script belongs in package.json (publishing goes
+// through .github/workflows/publish.yml).
+const SCOPE = "@artisann-studios/omp-zvec-grep";
+if (pkg.name !== SCOPE) {
+    throw new Error(`package.json name must be ${SCOPE} (got ${pkg.name ?? "(missing)"})`);
+}
+if (pkg.private === true) {
+    throw new Error(
+        `package.json must not be private (${SCOPE} is published restricted; drop the private flag)`,
+    );
+}
+if (pkg.publishConfig?.access !== "restricted") {
+    throw new Error(
+        'package.json publishConfig.access must be "restricted" (org-private; never public)',
+    );
+}
 if (pkg.scripts && typeof pkg.scripts.publish === "string") {
     throw new Error("a publish script must not exist in package.json");
 }
-if (fs.existsSync(path.join(ROOT, ".github", "workflows", "publish.yml"))) {
-    throw new Error("publish.yml must not exist; only release-validation.yml is allowed");
+if (!fs.existsSync(path.join(ROOT, ".github", "workflows", "publish.yml"))) {
+    throw new Error("publish.yml workflow must exist for the authorized scoped release");
 }
 
 // --- Tag/version agreement (only meaningful when invoked on a tag) --------

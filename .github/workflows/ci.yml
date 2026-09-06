@@ -1,6 +1,8 @@
 name: CI
 
-# Verification matrix for omp-zvec-grep (private, non-publishing).
+# Verification matrix for omp-zvec-grep. The repo is private; the scoped
+# package is published restricted to @artisann-studios only through the
+# manual/tag publish.yml workflow, never by CI on push/PR.
 #
 # Runs on every branch push (the new private repo's first push is the
 # feat/native-omp-port branch; no PR is planned initially, so limiting pushes
