@@ -113,19 +113,32 @@ the index was actively building, yielding `status: null`, `signal: SIGINT`,
 
 ## Final native port suite results (2026-09-05)
 
-Recorded from the final local run on macOS arm64 with Bun 1.4.2:
+Recorded from the final local run on macOS arm64 with Bun 1.4.2, after the
+auto-index lifecycle hardening and the native renderer-edge coverage:
 
-- `bun run check` — PASS (typecheck, oxlint, format check; one pre-existing
-  unicorn warning in `test/helpers/session-worker.ts`).
-- `bun test` — PASS, 16 tests / 68 expectations across 6 files (hermetic
-  default; deterministic fake `zg`, no network/model).
-- `bun run test:integration` — PASS, 7 tests / 21 expectations.
+- `bun run check` — PASS, warning-free (typecheck, oxlint, format check). One
+  oxlint unicorn warning (`no-useless-length-check`, agent-added, not from the
+  upstream baseline) had appeared at `test/helpers/session-worker.ts:147`; it
+  was removed by dropping a redundant `updates.length > 0 &&` prefix on an
+  `updates.some(...)` render assertion (`some([])` is already `false`), so the
+  final check reports zero warnings.
+- `bun test` — PASS, 26 tests / 99 expectations (hermetic default; deterministic
+  fake `zg`, no network/model), measured with the obsolete lifecycle draft
+  harness removed (`test/helpers/lifecycle-worker.ts`,
+  `test/integration/lifecycle.test.ts`).
+- `bun run test:integration` — PASS, 8 tests / 23 expectations (real SDK loader
+  worker and renderer gate suites; `sdk-real` 2/11, fake/wrapped gate 6/12).
 - `bun run test:cli` — PASS against the real installed `zg 0.2.1`.
+- `bun scripts/validate-pack.mjs` — PASS. Packs 18 entries (required source and
+  docs present; no `test/`, `.github/`, or `scripts/` content), installs the
+  tarball out of tree into a consumer-local npm peer graph under a disposable
+  agent dir/HOME, and loads the installed extension through the public OMP SDK
+  (`createAgentSession` + `ToolExecutionComponent`) to execute `zvec_status`
+  against a fake `zg` with a nonempty render. This resolves the earlier local
+  limitation note (the installed OMP native addon leaf not resolvable from Bun's
+  cache); that history is preserved above in the bring-up evidence.
 - Real CLI cancellation — proven separately (20k-file fixture, SIGINT; see
   above).
-- Limitation: the packed-validator host loader/render probe still fails on this
-  machine because the installed OMP native addon leaf is not resolvable from
-  Bun's cache (`pi_natives.darwin-arm64.node`); this is the same local
-  environment prerequisite recorded above, not a zvec/model installation
-  requirement. CI lanes on GitHub are defined but had not run at the time of
-  this record.
+- CI lanes on GitHub (`ubuntu-latest` Linux x64 and `macos-15` Apple Silicon)
+  are defined by `.github/workflows/ci.yml`; whether they run green is
+  established only by an actual GitHub run, recorded after this baseline.
