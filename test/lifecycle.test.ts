@@ -1,119 +1,252 @@
 import { describe, expect, test } from "bun:test";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { registerAutoIndex } from "../src/extension/tools.ts";
+import {
+    createAutoIndexer,
+    type AutoIndexExec,
+    type AutoIndexExecOptions,
+    type AutoIndexExecResult,
+} from "../src/extension/lifecycle.ts";
 
-function scenario(
-    statusCode: number,
-    mode: "missing" | "stale" | "ready" | "error",
-    indexCode = 0,
-) {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "omp-zvec-life-"));
-    fs.mkdirSync(path.join(cwd, ".zvec-grep"), { recursive: true });
-    fs.writeFileSync(
-        path.join(cwd, ".zvec-grep", "config.json"),
-        JSON.stringify({ projectScope: true, autoIndex: true }),
-    );
-    const calls: string[][] = [];
-    let startHandler: ((event: unknown, ctx: unknown) => unknown) | undefined;
-    let shutdownHandler: ((event: unknown, ctx: unknown) => unknown) | undefined;
-    let indexGate: Promise<void> | undefined;
-    const pi = {
-        on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
-            if (event === "session_start") startHandler = handler;
-            else if (event === "session_shutdown") shutdownHandler = handler;
-        },
-        exec: async (_command: string, args: string[]) => {
-            calls.push(args);
-            if (args[0] === "status")
-                return {
-                    stdout:
-                        mode === "ready"
-                            ? "Workspace index is ready"
-                            : mode === "stale"
-                              ? "Workspace index needs an update"
-                              : mode === "error"
-                                ? ""
-                                : "No zvec-grep index found",
-                    stderr: mode === "error" ? "permission denied" : "",
-                    code: statusCode,
-                    killed: false,
-                };
-            if (indexGate) await indexGate;
-            return { stdout: "", stderr: "", code: indexCode, killed: false };
-        },
-    };
-    registerAutoIndex(pi as never);
-    const ctx = { cwd, ui: { notify() {} } };
-    return {
-        calls,
-        startHandler: startHandler!,
-        shutdownHandler: shutdownHandler!,
-        ctx,
-        setGate(promise: Promise<void>) {
-            indexGate = promise;
-        },
-    };
-}
+type Notification = { message: string; type: "info" | "error" };
+
+type Call = { args: string[]; options: AutoIndexExecOptions };
+
+const readyResult = (): AutoIndexExecResult => ({
+    stdout: "Workspace index is ready",
+    stderr: "",
+    code: 0,
+    killed: false,
+});
+const missingResult = (): AutoIndexExecResult => ({
+    stdout: "No zvec-grep index found",
+    stderr: "",
+    code: 1,
+    killed: false,
+});
+const staleResult = (): AutoIndexExecResult => ({
+    stdout: "Workspace index needs an update",
+    stderr: "",
+    code: 1,
+    killed: false,
+});
+const successfulIndex = (): AutoIndexExecResult => ({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    killed: false,
+});
+
 const flush = async (): Promise<void> => {
+    await Promise.resolve();
+    await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
 };
 
-describe("auto-index lifecycle decisions", () => {
-    test("off is idle; ready checks without building; missing and stale build", async () => {
-        const ready = scenario(0, "ready");
-        await ready.startHandler({}, ready.ctx);
-        await flush();
-        expect(ready.calls.map((call) => call[0])).toEqual(["status"]);
-        const missing = scenario(1, "missing");
-        await missing.startHandler({}, missing.ctx);
-        await flush();
-        expect(missing.calls.map((call) => call[0])).toEqual(["status", "index"]);
-        const stale = scenario(1, "stale");
-        await stale.startHandler({}, stale.ctx);
-        await flush();
-        expect(stale.calls.map((call) => call[0])).toEqual(["status", "index"]);
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
     });
-    test("operational errors do not index; starts deduplicate", async () => {
-        const error = scenario(2, "error");
-        await error.startHandler({}, error.ctx);
+    return { promise, resolve, reject };
+}
+
+function harness(
+    responses: (args: string[]) => Promise<AutoIndexExecResult> | AutoIndexExecResult,
+) {
+    const calls: Call[] = [];
+    const notifications: Notification[] = [];
+    const exec: AutoIndexExec = async (args, options) => {
+        calls.push({ args: [...args], options });
+        return responses(args);
+    };
+    const autoIndexer = createAutoIndexer(exec);
+    const notify = (message: string, type?: "info" | "warning" | "error") => {
+        if (type === "info" || type === "error") notifications.push({ message, type });
+    };
+    return { autoIndexer, calls, notifications, notify };
+}
+
+describe("auto-index lifecycle coordinator", () => {
+    test("disabled settings do not execute a subprocess and fresh enabled settings start a check", async () => {
+        const h = harness(() => readyResult());
+        h.autoIndexer.start("/workspace/project", { autoIndex: false }, h.notify);
         await flush();
-        expect(error.calls.map((call) => call[0])).toEqual(["status"]);
-        const dedup = scenario(1, "missing");
-        let release!: () => void;
-        dedup.setGate(
-            new Promise<void>((resolve) => {
-                release = resolve;
-            }),
-        );
-        const first = dedup.startHandler({}, dedup.ctx);
-        const second = dedup.startHandler({}, dedup.ctx);
+        expect(h.calls).toHaveLength(0);
+
+        h.autoIndexer.start("/workspace/project", { autoIndex: true }, h.notify);
         await flush();
-        expect(dedup.calls.filter((call) => call[0] === "index")).toHaveLength(1);
-        release();
-        await Promise.all([first, second]);
+        expect(h.calls.map(({ args }) => args)).toEqual([["status", "--check-ready"]]);
     });
-    test("failure releases root for retry and shutdown aborts in-flight work", async () => {
-        const retry = scenario(1, "missing", 1);
-        await retry.startHandler({}, retry.ctx);
+
+    test("a ready status performs no build", async () => {
+        const h = harness(() => readyResult());
+        h.autoIndexer.start("/workspace/project", { autoIndex: true }, h.notify);
         await flush();
-        await retry.startHandler({}, retry.ctx);
-        await flush();
-        expect(retry.calls.filter((call) => call[0] === "index")).toHaveLength(2);
-        const shutdown = scenario(1, "missing");
-        let release!: () => void;
-        shutdown.setGate(
-            new Promise<void>((resolve) => {
-                release = resolve;
-            }),
+
+        expect(h.calls.map(({ args }) => args)).toEqual([["status", "--check-ready"]]);
+        expect(h.notifications).toEqual([]);
+    });
+
+    test("missing and stale recognized statuses use incremental index arguments", async () => {
+        const missing = harness((args) =>
+            args[0] === "status" ? missingResult() : successfulIndex(),
         );
-        const running = shutdown.startHandler({}, shutdown.ctx);
+        missing.autoIndexer.start("/workspace/missing", { autoIndex: true }, missing.notify);
         await flush();
-        await shutdown.shutdownHandler({}, shutdown.ctx);
-        release();
-        await running;
-        expect(shutdown.calls.map((call) => call[0])).toEqual(["status", "index"]);
+        expect(missing.calls.map(({ args }) => args)).toEqual([
+            ["status", "--check-ready"],
+            ["index", "/workspace/missing"],
+        ]);
+        expect(missing.calls.some(({ args }) => args.includes("--rebuild"))).toBe(false);
+        missing.autoIndexer.shutdown();
+
+        const stale = harness((args) => (args[0] === "status" ? staleResult() : successfulIndex()));
+        stale.autoIndexer.start("/workspace/stale", { autoIndex: true }, stale.notify);
+        await flush();
+        expect(stale.calls.map(({ args }) => args)).toEqual([
+            ["status", "--check-ready"],
+            ["index", "/workspace/stale"],
+        ]);
+        expect(stale.calls.some(({ args }) => args.includes("--rebuild"))).toBe(false);
+    });
+
+    test("status failures notify and never index", async () => {
+        const cases: Array<{ result: AutoIndexExecResult | Error; message: string }> = [
+            {
+                result: { stdout: "permission denied", stderr: "", code: 2, killed: false },
+                message: "permission denied",
+            },
+            { result: new Error("zg CLI was not found"), message: "zg CLI was not found" },
+            {
+                result: new Error("readiness check timed out"),
+                message: "readiness check timed out",
+            },
+            {
+                result: new Error("readiness check cancelled"),
+                message: "readiness check cancelled",
+            },
+        ];
+
+        for (const [index, scenario] of cases.entries()) {
+            const h = harness(() =>
+                scenario.result instanceof Error
+                    ? Promise.reject(scenario.result)
+                    : scenario.result,
+            );
+            h.autoIndexer.start(`/workspace/failure-${index}`, { autoIndex: true }, h.notify);
+            await flush();
+            expect(h.calls.map(({ args }) => args)).toEqual([["status", "--check-ready"]]);
+            const notification = h.notifications.at(-1);
+            expect(notification?.type).toBe("error");
+            expect(notification?.message).toContain(scenario.message);
+        }
+    });
+
+    test("a killed readiness process is operational failure, even with recognizable output", async () => {
+        const h = harness(() => ({
+            stdout: "No zvec-grep index found",
+            stderr: "",
+            code: 1,
+            killed: true,
+        }));
+        h.autoIndexer.start("/workspace/killed-status", { autoIndex: true }, h.notify);
+        await flush();
+
+        expect(h.calls.map(({ args }) => args)).toEqual([["status", "--check-ready"]]);
+        expect(h.notifications).toHaveLength(1);
+        expect(h.notifications[0].type).toBe("error");
+        expect(h.notifications[0].message).toContain("timed out");
+    });
+
+    test("a killed index process is not reported as a successful update", async () => {
+        const h = harness((args) =>
+            args[0] === "status"
+                ? missingResult()
+                : { stdout: "", stderr: "", code: 0, killed: true },
+        );
+        h.autoIndexer.start("/workspace/killed-index", { autoIndex: true }, h.notify);
+        await flush();
+
+        expect(h.notifications.at(-1)?.type).toBe("error");
+        expect(h.notifications.at(-1)?.message).toContain("timed out");
+    });
+
+    test("resolved aliases share one in-flight operation", async () => {
+        const status = deferred<AutoIndexExecResult>();
+        const index = deferred<AutoIndexExecResult>();
+        const h = harness((args) => {
+            if (args[0] === "status") return status.promise;
+            return index.promise;
+        });
+        h.autoIndexer.start("/workspace/alias/../project", { autoIndex: true }, h.notify);
+        h.autoIndexer.start("/workspace/project", { autoIndex: true }, h.notify);
+        await flush();
+        expect(h.calls.map(({ args }) => args)).toEqual([["status", "--check-ready"]]);
+
+        status.resolve(missingResult());
+        await flush();
+        expect(h.calls.map(({ args }) => args)).toEqual([
+            ["status", "--check-ready"],
+            ["index", "/workspace/project"],
+        ]);
+        index.resolve(successfulIndex());
+        await flush();
+    });
+
+    test("failed indexing releases the root so a later start can retry", async () => {
+        let indexAttempts = 0;
+        const h = harness((args) => {
+            if (args[0] === "status") return missingResult();
+            indexAttempts += 1;
+            return { stdout: "", stderr: "disk full", code: 1, killed: false };
+        });
+
+        h.autoIndexer.start("/workspace/retry", { autoIndex: true }, h.notify);
+        await flush();
+        h.autoIndexer.start("/workspace/retry", { autoIndex: true }, h.notify);
+        await flush();
+
+        expect(indexAttempts).toBe(2);
+        expect(h.calls.filter(({ args }) => args[0] === "index")).toHaveLength(2);
+        expect(h.notifications.filter(({ type }) => type === "error")).toHaveLength(2);
+    });
+
+    test("shutdown aborts pending status and prevents follow-on work", async () => {
+        const status = deferred<AutoIndexExecResult>();
+        const h = harness(() => status.promise);
+        h.autoIndexer.start("/workspace/shutdown-status", { autoIndex: true }, h.notify);
+        await flush();
+        const statusSignal = h.calls[0].options.signal;
+
+        h.autoIndexer.shutdown();
+        expect(statusSignal.aborted).toBe(true);
+        status.resolve(missingResult());
+        await flush();
+        h.autoIndexer.start("/workspace/shutdown-status", { autoIndex: true }, h.notify);
+        await flush();
+
+        expect(h.calls.map(({ args }) => args)).toEqual([["status", "--check-ready"]]);
+        expect(h.notifications).toEqual([]);
+    });
+
+    test("shutdown aborts pending index and suppresses completion output", async () => {
+        const index = deferred<AutoIndexExecResult>();
+        const h = harness((args) => (args[0] === "status" ? missingResult() : index.promise));
+        h.autoIndexer.start("/workspace/shutdown-index", { autoIndex: true }, h.notify);
+        await flush();
+        const indexSignal = h.calls[1].options.signal;
+
+        h.autoIndexer.shutdown();
+        expect(indexSignal.aborted).toBe(true);
+        index.resolve(successfulIndex());
+        await flush();
+
+        expect(h.calls.map(({ args }) => args)).toEqual([
+            ["status", "--check-ready"],
+            ["index", "/workspace/shutdown-index"],
+        ]);
+        expect(h.notifications.filter(({ message }) => message.includes("updated"))).toEqual([]);
     });
 });

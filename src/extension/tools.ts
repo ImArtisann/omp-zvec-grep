@@ -24,6 +24,7 @@ import {
 } from "../core/format.ts";
 import { clip, normalizeRoot } from "../core/workspace.ts";
 import { loadSettings } from "./config.ts";
+import { createAutoIndexer } from "./lifecycle.ts";
 import { openSettings } from "./settings-ui.ts";
 import { ZG_INDEX_TIMEOUT_MS, ZG_QUERY_TIMEOUT_MS, ZG_STATUS_TIMEOUT_MS } from "../core/zg.ts";
 
@@ -589,55 +590,19 @@ export function registerZvecCommands(pi: ExtensionAPI): void {
     });
 }
 export function registerAutoIndex(pi: ExtensionAPI): void {
-    const inflight = new Set<string>();
-    const shutdown = new AbortController();
-    pi.on("session_shutdown", () => shutdown.abort());
+    const exec: ZgExec = (command, args, options) => pi.exec(command, args, options);
+    const autoIndexer = createAutoIndexer((args, options) =>
+        runZg(
+            exec,
+            args,
+            { cwd: options.cwd, signal: options.signal, timeoutMs: options.timeoutMs },
+            args[0] === "status" ? "zvec auto-index readiness check" : "zvec auto-index",
+        ),
+    );
+    pi.on("session_shutdown", () => autoIndexer.shutdown());
     pi.on("session_start", (_event, ctx) => {
         const root = normalizeRoot(undefined, ctx.cwd);
-        if (!loadSettings(root).autoIndex || inflight.has(root) || shutdown.signal.aborted) return;
-        inflight.add(root);
-        void (async () => {
-            try {
-                const check = await runZg(
-                    (command, args, options) => pi.exec(command, args, options),
-                    ["status", "--check-ready"],
-                    { cwd: root, signal: shutdown.signal, timeoutMs: ZG_STATUS_TIMEOUT_MS },
-                    "zvec auto-index readiness check",
-                );
-                const statusText = `${check.stdout}\n${check.stderr}`;
-                const verdict = parseStatusVerdict(statusText);
-                if (check.code === 0 || verdict?.kind === "ready") return;
-                if (verdict?.kind !== "missing" && verdict?.kind !== "needs-update") {
-                    ctx.ui.notify(
-                        `zvec: readiness check failed: ${check.stderr || check.stdout || `exit ${check.code}`}`,
-                        "error",
-                    );
-                    return;
-                }
-                if (shutdown.signal.aborted) return;
-                ctx.ui.notify("zvec: index missing or stale — building in background…", "info");
-                const result = await runZg(
-                    (command, args, options) => pi.exec(command, args, options),
-                    ["index", root],
-                    { cwd: root, signal: shutdown.signal, timeoutMs: ZG_INDEX_TIMEOUT_MS },
-                    "zvec auto-index",
-                );
-                if (result.code !== 0 && !shutdown.signal.aborted)
-                    ctx.ui.notify(
-                        `zvec: auto index failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
-                        "error",
-                    );
-                else if (!shutdown.signal.aborted)
-                    ctx.ui.notify(`zvec: index updated for ${root}`, "info");
-            } catch (error) {
-                if (!shutdown.signal.aborted)
-                    ctx.ui.notify(
-                        `zvec: auto index failed: ${error instanceof Error ? error.message : String(error)}`,
-                        "error",
-                    );
-            } finally {
-                inflight.delete(root);
-            }
-        })();
+        const settings = loadSettings(root);
+        autoIndexer.start(root, settings, (message, type) => ctx.ui.notify(message, type));
     });
 }
