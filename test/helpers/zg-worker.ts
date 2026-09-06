@@ -15,6 +15,7 @@
  *   - missing-index: query error diagnostics; status stays a normal outcome
  *   - ready: status success
  *   - stale-slow: index cancellation via AbortSignal
+ *   - missing-executable: the real pi.exec ENOENT path is classified
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -116,6 +117,8 @@ async function main(): Promise<void> {
         await expectStatusReady();
     } else if (mode === "stale-slow") {
         await expectIndexCancellation();
+    } else if (mode === "missing-executable") {
+        await expectMissingExecutable();
     } else {
         await expectDefaultScenario();
     }
@@ -174,6 +177,18 @@ async function expectStatusReady(): Promise<void> {
     const state = readState("status");
     check(state !== undefined, "/zg status runs zg");
     check(realLocation(state?.cwd) === realLocation(proj), "/zg status pins cwd to the path");
+}
+
+async function expectMissingExecutable(): Promise<void> {
+    try {
+        await tool("zvec_status").execute("w-missing-executable", {}, undefined, undefined, ctx);
+        check(false, "status without zg rejects");
+    } catch (error) {
+        check(
+            String(error).includes("zvec_status unavailable: zg CLI was not found"),
+            "missing zg executable is classified distinctly",
+        );
+    }
 }
 
 async function expectIndexCancellation(): Promise<void> {

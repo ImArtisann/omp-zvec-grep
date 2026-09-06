@@ -256,6 +256,107 @@ check(
     "index expanded renderer preserves parsed raw output",
 );
 
+// Edge inputs exercise the actual loader-registered callbacks through the
+// public component, rather than calling renderer functions directly. They
+// intentionally render repeatedly at a narrow width: malformed details and
+// incomplete arguments must degrade to text, never throw or allocate a
+// background resource just because a frame is painted.
+const incompleteSearch = new ToolExecutionComponent(
+    "zvec_search",
+    {},
+    {},
+    wrappedSearch,
+    ui,
+    ws,
+    "edge-search",
+);
+let edgeSearchLines = "";
+for (let attempt = 0; attempt < 3; attempt += 1)
+    edgeSearchLines = incompleteSearch.render(20).join("\n");
+check(
+    edgeSearchLines.includes("zvec_search") && edgeSearchLines.includes("missing query"),
+    "search renderer handles incomplete args at narrow width",
+);
+incompleteSearch.updateResult({ content: [], details: { summary: "malformed" } }, false);
+for (let attempt = 0; attempt < 3; attempt += 1) incompleteSearch.render(20);
+check(
+    incompleteSearch.render(120).join("\n").includes("returned no output"),
+    "search renderer handles empty output and malformed details",
+);
+incompleteSearch.updateResult(
+    { content: [{ type: "text", text: "Error: synthetic failure\nextra detail" }], isError: true },
+    false,
+);
+incompleteSearch.setExpanded(true);
+check(
+    incompleteSearch.render(120).join("\n").includes("synthetic failure"),
+    "search renderer handles expanded error output",
+);
+incompleteSearch.updateResult({ content: [], details: {} }, true);
+for (let attempt = 0; attempt < 3; attempt += 1) incompleteSearch.render(20);
+check(
+    incompleteSearch.render(20).join("\n").includes("searching"),
+    "search renderer handles repeated partial output",
+);
+
+const incompleteIndex = new ToolExecutionComponent(
+    "zvec_index",
+    {},
+    {},
+    wrappedIndex,
+    ui,
+    ws,
+    "edge-index",
+);
+incompleteIndex.updateResult({ content: [], details: { indexSummary: null } }, false);
+check(
+    incompleteIndex.render(120).join("\n").includes("returned no output"),
+    "index renderer handles empty output and malformed details",
+);
+incompleteIndex.updateResult(
+    { content: [{ type: "text", text: "Error: synthetic index failure" }], isError: true },
+    false,
+);
+check(
+    incompleteIndex.render(120).join("\n").includes("synthetic index failure"),
+    "index renderer handles error output",
+);
+incompleteIndex.updateResult({ content: [], details: {} }, true);
+for (let attempt = 0; attempt < 3; attempt += 1) incompleteIndex.render(20);
+check(
+    incompleteIndex.render(120).join("\n").includes("indexing"),
+    "index renderer handles repeated partial output",
+);
+
+const incompleteStatus = new ToolExecutionComponent(
+    "zvec_status",
+    {},
+    {},
+    wrappedStatus,
+    ui,
+    ws,
+    "edge-status",
+);
+incompleteStatus.updateResult({ content: [], details: { verdict: "malformed" } }, false);
+check(
+    incompleteStatus.render(120).join("\n").includes("returned no output"),
+    "status renderer handles empty output and malformed details",
+);
+incompleteStatus.updateResult(
+    { content: [{ type: "text", text: "Error: synthetic status failure" }], isError: true },
+    false,
+);
+check(
+    incompleteStatus.render(120).join("\n").includes("synthetic status failure"),
+    "status renderer handles error output",
+);
+incompleteStatus.updateResult({ content: [], details: {} }, true);
+for (let attempt = 0; attempt < 3; attempt += 1) incompleteStatus.render(20);
+check(
+    incompleteStatus.render(120).join("\n").includes("checking"),
+    "status renderer handles repeated partial output",
+);
+
 await session.dispose();
 console.log(`WORKER_OK wrapped checks=${checks}`);
 process.exit(0);

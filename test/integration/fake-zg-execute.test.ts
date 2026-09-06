@@ -99,4 +99,10 @@ describe("hermetic zvec execute + /zg dispatch against a deterministic fake zg",
         expect(run.code, run.stdout + run.stderr).toBe(0);
         expect(run.stdout).toContain("WORKER_OK mode=stale-slow");
     });
+
+    test("missing-executable: runZg classifies ENOENT distinctly", () => {
+        const run = runWorker("missing-executable", { PATH: path.join(ROOT, "empty-bin") });
+        expect(run.code, run.stdout + run.stderr).toBe(0);
+        expect(run.stdout).toContain("WORKER_OK mode=missing-executable");
+    });
 });
