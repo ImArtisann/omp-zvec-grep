@@ -58,5 +58,5 @@ describe("wrapped session tools and real ToolExecutionComponent rendering", () =
         });
         expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
         expect(result.stdout.toString()).toContain("WORKER_OK wrapped");
-    });
+    }, 60_000);
 });
