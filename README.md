@@ -1,218 +1,139 @@
 # omp-zvec-grep
 
-Private native [Oh My Pi](https://github.com/can1357/oh-my-pi) extension
-exposing local [zvec-grep](https://github.com/zvec-ai/zvec-grep) (`zg`) as
-agent-native discovery: hybrid lexical + vector search over an indexed
-workspace, with explicit index lifecycle and status surfaces. Native OMP port of
-`pi-zvec-grep`; upstream history and attribution are retained (see
-[UPSTREAM.md](UPSTREAM.md), [LICENSE](LICENSE), and
-[docs/compatibility.md](docs/compatibility.md)).
+Native [Oh My Pi](https://github.com/can1357/oh-my-pi) extension for local
+[zvec-grep](https://github.com/zvec-ai/zvec-grep) (`zg`). It adds hybrid
+lexical/vector search, workspace indexing, index status, and the `/zg` command
+to OMP.
 
 ## Requirements
 
-- Oh My Pi `18.1.11` (pinned peer: `@oh-my-pi/pi-coding-agent`,
-  `@oh-my-pi/pi-tui`, `@oh-my-pi/pi-utils`).
-- The real `zg` CLI `0.2.1` preinstalled on `PATH` (`zg --version`). It is a
-  separate install — the extension never installs it:
-  `npm i -g @zvec/zvec-grep@0.2.1`. The first actual index build may download a
-  local embedding model; nothing downloads during extension load.
-- Bun `1.4.2` — the tested runtime: OMP's engine loads TS extensions on Bun, and
-  the development toolchain runs on Bun (`engines.bun` requires `>= 1.4.2`; CI
-  and local checks pin `1.4.2`).
+- Oh My Pi `18.1.11` (the package's pinned peer version).
+- Bun `1.4.2` or newer. OMP loads the TypeScript extension with Bun.
+- The separate `zg` CLI `0.2.1`, installed on `PATH`:
+  `npm install --global @zvec/zvec-grep@0.2.1`. The `zg` CLI requires Node.js
+  `22` or newer.
 
-No extension-load path spawns a subprocess, installs `zg` or models, makes
-network requests, or mutates active host tools. Indexing, status, and search
-execute the preinstalled `zg` binary with an explicit cwd, an abort signal, and
-per-action timeouts.
+The extension does not install `zg`, download a model during extension load, or
+make network requests while loading. The first real index build can download the
+embedding model used by `zg`.
 
-## Install
+## Install in OMP
 
-The extension publishes to the npm registry as the **public** scoped package
-`@artisann-studios/omp-zvec-grep` — anyone can install it, no account or token
-needed. The GitHub repository `https://github.com/ImArtisann/omp-zvec-grep` is
-public too. Install from npm (public) or clone and link.
-
-**From npm (published artifact)** — the OMP 18.1.11 plugin CLI accepts npm
-specs, so anyone installs the pinned release with:
+The public npm package is:
 
 ```sh
 omp plugin install @artisann-studios/omp-zvec-grep@0.1.0
 ```
 
-This is only available after the release has actually been published (see
-`docs/release-checklist.md`); nothing below claims a publish that has not run.
+The package is public; npm authentication is not needed to install it. Start a
+new OMP session after installation. If OMP is already running, use the pinned
+host command `/reload-plugins` instead.
 
-**One-off session load** — from the checkout root, load the extension for that
-launch only (no persistent change):
+To use a checkout for one launch:
 
 ```sh
-omp --extension ./index.ts
+omp --extension /absolute/path/to/omp-zvec-grep/index.ts
 ```
 
-The `-e`/`--extension` flag takes an extension file, is repeatable, and accepts
-absolute paths (`omp --extension /path/to/omp-zvec-grep/index.ts`).
-
-**Persistent plugin** — record a local checkout as a plugin (symlinked into
-OMP's plugins directory and persisted across sessions):
+To persist a local checkout as a plugin:
 
 ```sh
 omp plugin link /absolute/path/to/omp-zvec-grep
 ```
 
-`omp plugin link` resolves the path against the current directory, so pass an
-absolute path; it reads `package.json` (this package is
-`name: "@artisann-studios/omp-zvec-grep"`). `omp plugin install /absolute/path`
-routes local paths through the same link flow — either verb works for a
-directory. New sessions load the linked plugin.
+The package manifest declares the extension entry point through
+`omp.extensions`, which is the OMP plugin convention.
 
-**From the GitHub repo** — clone (public, no auth needed), then link:
+## First run
 
-```sh
-git clone https://github.com/ImArtisann/omp-zvec-grep.git
-cd omp-zvec-grep
-omp plugin link "$PWD"
-```
+The commands below intentionally distinguish shell commands from commands typed
+inside an interactive OMP session:
 
-`/zg settings` requires the interactive TUI; in non-TUI modes it reports that it
-is unavailable.
+1. **Shell:** install the package and the separate `zg` prerequisite above.
+2. **Shell:** open OMP in the workspace you want to index:
+   `omp --cwd /absolute/path/to/workspace`.
+3. **In OMP:** run `/zg settings`, then choose the settings scope, default
+   search limit, and whether auto-indexing should be on.
+4. **In OMP:** run `/zg index`, then `/zg status` to confirm the index is ready.
+5. **In OMP:** ask the agent a semantic question that the indexed workspace can
+   answer.
 
-## Surface
+## Use it
 
-- `zvec_search` — hybrid semantic + keyword search over a locally indexed
-  workspace. Pass `query`, or explicit groups `queries` / `fts` / `vector`,
-  optional `fuse`, `limit` (default 7, hard cap 50), path `globs`, `fileTypes` /
-  `excludedFileTypes`, `symbolTypes` / `preferSymbol`, `modifiedAfter` /
-  `modifiedBefore`, and a `root` (defaults to the current working directory).
-  Use it for semantic, fuzzy, or location-unknown questions.
-- `zvec_index` — create/update the workspace index, or `mode: rebuild` /
-  `mode: drop` it. `rebuild` and `drop` are destructive and only run on explicit
-  request (drop passes `--yes`). Optional `embedding`, `globs`, file-type
-  filters, and `hidden`. `root` is required. A workspace must be indexed before
-  searching.
-- `zvec_status` — report index presence, coverage, and freshness. **Missing or
-  stale indices are normal status outcomes**, not tool failures.
-- `/zg <index|rebuild|drop|status|settings|help> [path]` — command surface with
-  argument completion. `path` is the whole remainder of the argument string and
-  may be quoted (`/zg status "/path/with spaces"`) when it contains spaces; bare
-  `/zg` or an unknown subcommand prints usage. `rebuild` and `drop` announce
-  themselves as explicit destructive operations before running. `/zg settings`
-  opens the interactive settings menu.
+A workspace must have an index before search can return results.
 
-### Semantic search or native tools?
+- `/zg index [path]` creates or updates the index for the current directory or
+  the supplied path. `/zg rebuild [path]` rebuilds it and `/zg drop [path]`
+  removes it; both are explicitly destructive operations.
+- `/zg status [path]` reports whether the index is ready, missing, or stale.
+- `/zg` and `/zg help` show the command help. A path containing spaces can be
+  quoted as the whole remainder, for example `/zg status "/path/with spaces"`.
+- `zvec_search` is the agent tool for semantic, fuzzy, or location-unknown
+  questions. It supports query groups, a result limit, path/file/symbol filters,
+  and an optional workspace root.
+- `zvec_index` creates, updates, rebuilds, or drops an index. Its `root` is
+  required.
+- `zvec_status` reports index presence, coverage, and freshness; missing or
+  stale indexes are normal status results, not tool failures.
 
-`zvec_search` answers meaning/fuzzy/unknown-location questions against an index.
-For exact strings, regex, filenames, counts, file lists, or anything piped, use
-OMP's native `grep`/`glob` tools or the shell's `rg` instead — zg's managed `rg`
-subset intentionally cannot do counts, file lists, or pipes. This routing is
-baked into the tool descriptions so the agent picks the right surface.
+For exact strings, regular expressions, filenames, counts, file lists, or pipes,
+use OMP's native `grep`/`glob` tools or the shell's `rg`. Use `zvec_search` for
+meaning-based or fuzzy discovery.
 
-## Configuration
+## Configure with `/zg settings`
 
-Two layers, both read fresh (cheap per-file mtime cache) so hand edits take
-effect immediately:
+Run `/zg settings` in an interactive OMP session. Settings are managed by the
+extension's menu; they are not OMP settings and should not be placed in an OMP
+settings file.
 
-- **User defaults**: `<agentDir>/omp-zvec-grep/config.json`, where `agentDir` is
-  OMP's public `getAgentDir()` (honors `PI_CODING_AGENT_DIR` and OMP profiles;
-  this is the native OMP location, not a legacy Pi agent dir shim). This file
-  holds values only — scope flags never apply from it, and stray legacy keys are
-  stripped on the next user-layer save.
-- **Workspace (project)**: `<workspace>/.zvec-grep/config.json`, anchored at the
-  current working directory with no walk-up. It is **self-contained**: built-in
-  defaults + its contents, with a boolean `projectScope` activation flag. `true`
-  makes this file authoritative **for this workspace only** (no user values
-  mixed in), so a committed file means the same on every machine and can never
-  flip another workspace. `false` (or a hand-written file without the flag)
-  leaves the values **dormant** and applies the user layer; deactivating project
-  scope preserves the parked values and unrelated keys. A legacy
-  `settingsScope: "project"` string is honored as `true` read-only (never
-  written).
+The menu controls:
 
-Defaults: `defaultLimit: 7` (valid range 1–50, hard cap 50) and
-`autoIndex: false`. Writes stay inside the resolved workspace and refuse
-symlinked, redirected, or non-owned config paths.
+- **Settings scope** — `user` uses the active OMP agent directory's
+  `omp-zvec-grep/config.json`; `project` uses the current workspace's
+  `.zvec-grep/config.json`. A project file is self-contained: when its
+  `projectScope` flag is true, its values are combined with built-in defaults,
+  never with user values. A committed project file therefore affects only that
+  repository. Choosing `user` leaves a project file dormant rather than deleting
+  it.
+- **Default search limit** — defaults to `7`, accepts `1`–`50`, and applies only
+  when a search call does not provide its own limit. An explicit tool-call limit
+  wins.
+- **Auto index on start** — off by default. When enabled, each session start
+  checks the workspace with `zg status --check-ready` and builds a missing or
+  stale index in the background. The build may download the local embedding
+  model.
 
-**Moving old Pi-era user settings** is an explicit opt-in, one-time step you run
-yourself — the extension has no automatic importer and never reads the old
-`pi-zvec-grep` user config.
-[docs/pi-config-migration.md](docs/pi-config-migration.md) documents a
-conservative copy-only snippet plus manual steps: only the user values
-`defaultLimit` and `autoIndex` are copied into
-`<agentDir>/omp-zvec-grep/config.json` (destination resolved via the public
-`getAgentDir()` under the project's Bun, honoring `PI_CODING_AGENT_DIR` and OMP
-profiles, or an agent dir you supply), the destination must not already exist,
-scope flags are never copied, the old config is never deleted, and zg indexes
-are never rebuilt or dropped — zg 0.2.1 indexes at the same `.zvec-grep`
-workspace location keep working.
+The active OMP agent directory follows OMP's profile and `PI_CODING_AGENT_DIR`
+resolution. The project path is anchored at the current working directory; it
+does not walk up to another repository. Configuration files are read fresh so
+changes made in `/zg settings` take effect without reinstalling the plugin.
 
-**Auto-index (default off)**: when enabled, every `session_start` runs a
-readiness guard (`zg status --check-ready`) in the working directory; only a
-missing or stale index triggers a background build (fire-and-forget,
-per-workspace deduplication, cancelled at session shutdown). A healthy index
-costs one cheap guard call per start. Off by default because the first build can
-take a while and may download the local embedding model.
+## Development
 
-## Errors and rendering
-
-- **Missing index — expected, but status and search differ**: `zvec_status`
-  treats a missing or stale index as a normal outcome (a verdict line, never a
-  tool failure). `zvec_search` before any index exists is different: zg exits
-  nonzero, so the tool throws an error carrying zg's `WORKSPACE_INDEX_NOT_FOUND`
-  diagnostic; that error is the expected signal (the tool description tells the
-  agent to run `zvec_index` first), not an operational failure such as a missing
-  `zg` binary or a timeout.
-- **Operational failures**: `zg` not installed →
-  `<action> unavailable: zg CLI was not found`; a nonzero exit → the stderr/exit
-  code is surfaced; per-action timeouts (query 180s, index 600s, status 30s) →
-  `<action> timed out after Ns`; an agent abort/cancel → `<action> cancelled`.
-- **Rendering**: tools use native custom renderers (`renderCall` /
-  `renderResult`) with themed summary lines — e.g. hit/file counts with a stale
-  marker and the top hit headline for search, scanned/entity counts for
-  indexing, and a colored verdict line for status — with expandable previews
-  that clip long raw output instead of dumping it.
-
-## Development and CI
-
-Requires Bun `1.4.2+` and the OMP `18.1.11` dev pins. No command here publishes
-the package; the public `@artisann-studios/omp-zvec-grep` release happens only
-through the explicit publish workflow (`.github/workflows/publish.yml`).
+From a checkout with Bun `1.4.2+`:
 
 ```sh
 bun install --frozen-lockfile
-bun run check                 # typecheck + lint + format:check
-bun test                      # hermetic default: real host loader, deterministic fake zg
-bun run test:integration      # explicit hermetic integration suites
-bun run test:cli              # REAL zg contract smoke — explicit opt-in lane
-bun scripts/validate-pack.mjs # pack contents + out-of-tree install guard
+bun run check
+bun test
+bun run test:integration
 ```
 
-- `bun test` and `test:integration` are hermetic: a deterministic fake `zg` on
-  `PATH`, disposable agent/workspace dirs, the real OMP SDK loader/runner
-  (`createAgentSession`) in isolated workers — no real zg, no network, no model,
-  no skip gates.
-- `test:cli` runs `test/cli/smoke.ts` against the **installed** `zg 0.2.1`
-  (help/version/rg/no-index contract; deliberately no model or network work
-  today). It is not part of the default hermetic command.
-- CI (`.github/workflows/ci.yml`) runs the frozen install, `check`, `bun test`,
-  `test:integration`, and pack validation on every branch push and pull request
-  on `ubuntu-latest` (Linux x64) and `macos-15` (GitHub-hosted Apple Silicon,
-  arm64). A separate `real-zg-smoke` job is manual-only (`workflow_dispatch`,
-  never push/PR): it pins Node 22 (the zg CLI requires `node >= 22`) and
-  installs the pinned upstream `@zvec/zvec-grep@0.2.1` CLI, then runs
-  `test:cli`; it stays opt-in because an index-building assertion would download
-  a local embedding model on first build.
-  `.github/workflows/release-validation.yml` is the manual release-candidate
-  gate (read-only, no publish).
-- Exercised locally on macOS arm64. The CI lanes (including Linux x64) are
-  defined but unverified until GitHub actually runs them — a skipped manual-only
-  job is not a result, and nothing here claims any CI lane has run or passed.
+`bun run test:cli` is a separate opt-in smoke lane for the real `zg 0.2.1`
+installed on `PATH`; it is not part of the hermetic default tests and may
+prepare a local embedding model if its assertions are expanded.
 
-## Provenance
+## Move old Pi settings (optional)
 
-Native port of `pi-zvec-grep` v0.3.1
-(`db7b42db4a84dc724c3347fbcc2bdf32792882d6`), pinned against OMP `18.1.11`
-(`e3106be68f778635da3a17106835ce2e0e6992af`) and zg `0.2.1`
-(`426cd3bf9bf81f34a884945abafc58709897dadf`). Upstream Apache-2.0 license and
-notices preserved in [LICENSE](LICENSE); provenance in
-[UPSTREAM.md](UPSTREAM.md); baseline and evidence in
-[docs/compatibility.md](docs/compatibility.md); cutover checklist in
-[docs/release-checklist.md](docs/release-checklist.md).
+The native port does not read or migrate the old `pi-zvec-grep` configuration.
+If needed, follow the explicit, copy-only procedure in
+[docs/pi-config-migration.md](docs/pi-config-migration.md). It transfers only
+`defaultLimit` and `autoIndex`, refuses to overwrite an existing destination,
+never copies scope flags, and never changes an index.
+
+## Attribution and compatibility
+
+This is a native port of `pi-zvec-grep` v0.3.1. Upstream attribution and the
+Apache-2.0 license are retained in [UPSTREAM.md](UPSTREAM.md) and
+[LICENSE](LICENSE). Supported-version and platform evidence is recorded in
+[docs/compatibility.md](docs/compatibility.md).

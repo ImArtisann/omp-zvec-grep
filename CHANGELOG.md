@@ -4,8 +4,7 @@ The native extension publishes as the **public** npm package
 `@artisann-studios/omp-zvec-grep` (anyone can install it), and the GitHub
 repository is public. The 0.1.0 release below was published 2026-09-05;
 subsequent releases run only through the explicit publish.yml workflow after the
-release checks pass. Entries describe the current working tree on
-`feat/native-omp-port`.
+release checks pass.
 
 ## 0.1.0 (2026-09-05)
 
@@ -49,8 +48,7 @@ of the published artifact.
   only the explicit publish workflow does.
 - Documentation: upstream compatibility baseline and evidence
   (`docs/compatibility.md`), explicit opt-in migration guide with a copy-only
-  transfer snippet for Pi-era user settings (`docs/pi-config-migration.md`), and
-  a release cutover checklist (`docs/release-checklist.md`).
+  transfer snippet for Pi-era user settings (`docs/pi-config-migration.md`).
 
 ### Safety notes
 
@@ -61,8 +59,3 @@ of the published artifact.
   config; the opt-in transfer is copy-only (destination must not exist), never
   copies scope flags, never deletes the old config, and never rebuilds or drops
   existing zg indexes.
-- One host-verification PTY run wrote an `autoIndex` setting under the normal
-  OMP profile and the file was later removed without a prior stat; whether any
-  user config existed there cannot be established. See `docs/compatibility.md`
-  for the full disclosure. Later host runs are isolated with disposable
-  `PI_CODING_AGENT_DIR`/`HOME` directories.
