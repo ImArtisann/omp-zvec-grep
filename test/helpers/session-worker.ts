@@ -144,7 +144,7 @@ await wrappedIndex!.execute(
 const iState = readState("index");
 check(iState?.args.includes("--rebuild") === true, "wrapped zvec_index ran with rebuild");
 check(
-    updates.length > 0 && updates.some((text) => text.includes("rebuilding")),
+    updates.some((text) => text.includes("rebuilding")),
     "wrapped zvec_index streams an initial update",
 );
 
