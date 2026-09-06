@@ -183,15 +183,78 @@ const finished = await wrappedSearch!.execute(
     undefined,
     undefined,
 );
-const resultText = textContent(finished);
-(block as { updateResult(result: unknown): void }).updateResult({
-    content: [{ type: "text", text: resultText }],
-    details: (finished as { details?: unknown }).details,
-    isError: false,
-});
+block.updateResult(finished, false, "wrapped-search-2");
 const resultLines = block.render(120).join("\n");
-check(resultLines.length > 0, "result block renders");
-check(!resultLines.includes("searching"), "result block is not stuck on the partial state");
+check(
+    resultLines.includes("2 hits") && resultLines.includes("2 files"),
+    "search collapsed renderer summarizes parsed hits",
+);
+check(
+    resultLines.includes("stale") && resultLines.includes("auth.ts"),
+    "search collapsed renderer includes stale/top summary",
+);
+block.setExpanded(true);
+check(
+    block.render(120).join("\n").includes("Q1 [primary]"),
+    "search expanded renderer preserves grouped raw output",
+);
+const wrappedStatus = session.getToolByName("zvec_status");
+check(wrappedStatus !== undefined, "session exposes wrapped status tool");
+const statusResult = await wrappedStatus!.execute(
+    "wrapped-status",
+    { root: "proj" },
+    undefined,
+    undefined,
+    undefined,
+);
+const statusBlock = new ToolExecutionComponent(
+    "zvec_status",
+    { root: "proj" },
+    {},
+    wrappedStatus,
+    ui,
+    ws,
+    "wrapped-status",
+);
+statusBlock.setArgsComplete("wrapped-status");
+statusBlock.updateResult(statusResult, false, "wrapped-status");
+check(
+    statusBlock.render(120).join("\n").includes("no index"),
+    "status collapsed renderer summarizes missing state",
+);
+statusBlock.setExpanded(true);
+check(
+    statusBlock.render(120).join("\n").includes("No zvec-grep index"),
+    "status expanded renderer preserves raw fallback",
+);
+const indexBlock = new ToolExecutionComponent(
+    "zvec_index",
+    { root: "proj", mode: "rebuild" },
+    {},
+    wrappedIndex,
+    ui,
+    ws,
+    "wrapped-index-render",
+);
+indexBlock.setArgsComplete("wrapped-index-render");
+const indexResult = await wrappedIndex!.execute(
+    "wrapped-index-render",
+    { root: "proj", mode: "rebuild" },
+    undefined,
+    undefined,
+    undefined,
+);
+indexBlock.updateResult(indexResult, false, "wrapped-index-render");
+check(
+    indexBlock.render(120).join("\n").includes("index updated") &&
+        indexBlock.render(120).join("\n").includes("4 files"),
+    "index collapsed renderer summarizes parsed counts",
+);
+indexBlock.setExpanded(true);
+check(
+    indexBlock.render(120).join("\n").includes("Workspace index"),
+    "index expanded renderer preserves parsed raw output",
+);
 
 await session.dispose();
 console.log(`WORKER_OK wrapped checks=${checks}`);

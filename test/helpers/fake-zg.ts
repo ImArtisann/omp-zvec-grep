@@ -44,6 +44,17 @@ if (cmd === 'query') {
   }
   record('query');
   console.log('FAKE-QUERY args: ' + rest.join(' '));
+  console.log('query groups (1):');
+  console.log('Q1 [primary]: fake');
+  console.log('hits: 2');
+  console.log('');
+  console.log('#1 matchedBy=fts+vector src/auth.ts:1');
+  console.log('status: possibly_stale');
+  console.log('heading: validateToken');
+  console.log('1\\tvalidate token');
+  console.log('');
+  console.log('#2 src/other.ts:2');
+  console.log('2\\tother');
 } else if (cmd === 'index') {
   if (process.env.ZFAKE_MODE === 'stale-slow') {
     const ms = Number(process.env.ZFAKE_INDEX_SLEEP || 0) * 1000;
@@ -55,6 +66,10 @@ if (cmd === 'query') {
     process.exit(1);
   }
   console.log('FAKE-INDEX args: ' + rest.join(' ') + ' cwd=' + process.cwd());
+  console.log('Workspace index');
+  console.log('files\\t4 scanned, 1 added, 1 modified, 0 retried, 1 unchanged, 0 deleted, 0 failed');
+  console.log('entities\\t9');
+  console.log('duration\\t2s (2000ms)');
 } else if (cmd === 'status') {
   record('status');
   if (process.env.ZFAKE_MODE !== 'ready') {

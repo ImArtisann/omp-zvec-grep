@@ -165,17 +165,17 @@ if (component.render(120).length === 0) throw new Error("packed renderer returne
 await session.dispose();
 console.log("packed SDK load/execute/render passed");`,
     );
-    run("bun", [probe], {
-        cwd: project,
-        env: {
-            ...process.env,
-            OMP_PACK_ENTRY: entry,
-            PI_CODING_AGENT_DIR: agentDir,
-            HOME: path.join(project, "home"),
-            OMP_SKIP_SETUP: "1",
-            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-        },
-    });
+    const hostEnv = {
+        ...process.env,
+        OMP_PACK_ENTRY: entry,
+        PI_CODING_AGENT_DIR: agentDir,
+        HOME: path.join(project, "home"),
+        OMP_SKIP_SETUP: "1",
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+    };
+    delete hostEnv.OMP_PROFILE;
+    delete hostEnv.PI_PROFILE;
+    run("bun", [probe], { cwd: project, env: hostEnv });
     console.log(
         `installed ${pkg.name}@${pkg.version} outside checkout; SDK load/execute/render passed`,
     );

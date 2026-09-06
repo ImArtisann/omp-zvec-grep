@@ -149,6 +149,12 @@ async function expectStatusNormal(): Promise<void> {
 }
 
 async function expectStatusReady(): Promise<void> {
+    const configDir = path.join(ws, ".zvec-grep");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+        path.join(configDir, "config.json"),
+        JSON.stringify({ projectScope: true, autoIndex: true }),
+    );
     const result = await tool("zvec_status").execute(
         "w-3",
         { root: "proj" },
@@ -157,6 +163,12 @@ async function expectStatusReady(): Promise<void> {
         ctx,
     );
     check(textContent(result).includes("Workspace index is ready"), "status reports ready");
+    resetState();
+    const handlers = extension.handlers.get("session_start") ?? [];
+    await Promise.all(handlers.map((handler) => handler({ type: "session_start" }, ctx)));
+    await Bun.sleep(100);
+    check(readState("status") !== undefined, "auto-index ready check runs");
+    check(readState("index") === undefined, "auto-index does not build ready index");
     resetState();
     await extension.commands.get("zg")!.handler("status proj", commandCtx);
     const state = readState("status");
@@ -294,7 +306,20 @@ async function expectDefaultScenario(): Promise<void> {
     resetState();
     await zg.handler("rebuild proj", commandCtx);
     check(readState("index")?.args.includes("--rebuild") ?? false, "/zg rebuild passes --rebuild");
-
+    const spaced = path.join(ws, "space proj");
+    fs.mkdirSync(spaced, { recursive: true });
+    resetState();
+    await zg.handler('status "space proj"', commandCtx);
+    check(
+        realLocation(readState("status")?.cwd) === realLocation(spaced),
+        "/zg accepts quoted paths with spaces",
+    );
+    resetState();
+    await zg.handler("status space proj", commandCtx);
+    check(
+        realLocation(readState("status")?.cwd) === realLocation(spaced),
+        "/zg treats the whole remainder as a path",
+    );
     resetState();
     await zg.handler("drop proj", commandCtx);
     cmdState = readState("index");
@@ -321,7 +346,12 @@ async function expectDefaultScenario(): Promise<void> {
     resetState();
     const lifecycleHandlers = extension.handlers.get("session_start") ?? [];
     await Promise.all(lifecycleHandlers.map((handler) => handler({ type: "session_start" }, ctx)));
-    await Bun.sleep(250);
+    for (
+        let attempt = 0;
+        attempt < 20 && (!readState("status") || !readState("index"));
+        attempt += 1
+    )
+        await Bun.sleep(25);
     check(readState("status") !== undefined, "auto-index readiness check runs");
     check(readState("index") !== undefined, "auto-index builds missing index");
 }
