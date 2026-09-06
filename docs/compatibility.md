@@ -42,3 +42,16 @@ Command: `npm test` from the cloned v0.3.1 tree on Bun 1.4.2 / Node 22.22.0 (202
 - A real disposable fixture indexed successfully with the installed `zg 0.2.1`: one file scanned/added, one entity, then status reported 100% ready and a semantic query returned `auth.ts:1` (`matchedBy=fts+vector`). The first local model preparation downloaded 16 KiB; this was explicit smoke work, never extension-load behavior.
 - Actual OMP 18.1.11 PTY loaded the absolute extension path and rendered `/zg help` and `/zg settings`; SettingsList navigation changed auto-index, save persisted it on reopen, and Esc restored the editor. The first PTY used the normal agent profile; its temporary config was removed after the smoke. Subsequent host tests must set `PI_CODING_AGENT_DIR` to a disposable directory before process launch.
 - A fresh SDK wrapper/render smoke was attempted but blocked by the locally installed OMP native addon leaf not being discoverable from Bun's cache (`pi_natives.darwin-arm64.node` resolution failure). This is an environment prerequisite for the host harness, not a zvec/model installation requirement.
+
+Exact real-CLI fixture lines:
+
+```text
+status-before: ? Workspace index is not configured
+index: files  1 scanned, 1 added, 0 modified, 0 retried, 0 unchanged, 0 deleted, 0 failed
+index: entities  1
+status-after: ✓ Workspace index is ready
+status-after: Coverage  ████████████████████ 100%  1 / 1 files
+query-after: #1 matchedBy=fts+vector auth.ts:1
+```
+
+The first direct cancellation attempt completed its tiny fixture rebuild before SIGINT could interrupt it; it is not counted as cancellation proof. No cancellation claim is made without a sufficiently large active fixture.
