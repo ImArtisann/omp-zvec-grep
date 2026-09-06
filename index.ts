@@ -1,12 +1,6 @@
-/**
- * pi-zvec-grep — zvec-grep's local-first hybrid search as native pi tools.
- *
- * Entry point only. The tool/command surface lives in src/extension/tools.ts;
- * scoped settings live in src/extension/config.ts (+ settings-ui.ts menu);
- * workspace path and output helpers live in src/core/.
- */
+/** Native Oh My Pi entry point for omp-zvec-grep. */
 
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI } from '@oh-my-pi/pi-coding-agent';
 import { registerAutoIndex, registerZvecCommands, registerZvecTools } from './src/extension/tools.ts';
 
 export default function (pi: ExtensionAPI): void {
